@@ -1,0 +1,1243 @@
+openapi: 3.0.3
+info:
+  title: QonoS v2 REST API
+  description: |
+    Foundational API contract for QonoS v2. This specification defines the data model,
+    CRUD endpoints, job APIs, and follows OpenStack API conventions.
+  version: 2.0.0
+
+servers:
+  - url: /v2
+    description: QonoS v2 API
+
+security:
+  - X-Auth-Token: []
+
+tags:
+  - name: schedules
+    description: Core resource for defining recurring actions.
+  - name: jobs
+    description: Execution records generated from schedules.
+  - name: job-executions
+    description: Detailed tracking of job execution lifecycle and status.
+  - name: actions
+    description: Read-only registry of available action types
+  - name: health
+    description: Service health check endpoints.
+
+paths:
+  /:
+    get:
+      tags: [health]
+      summary: API root
+      description: Returns API version info. Use /schedules, /jobs, etc. for real endpoints.
+      operationId: showRoot
+      responses:
+        '200':
+          description: API info
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  version: { type: string }
+                  links:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        rel: { type: string }
+                        href: { type: string }
+              example:
+                name: QonoS v2 REST API
+                version: "2.0.0"
+                links:
+                  - rel: self
+                    href: /v2
+                  - rel: health
+                    href: /v2/health
+                  - rel: schedules
+                    href: /v2/schedules
+                  - rel: jobs
+                    href: /v2/jobs
+                  - rel: actions
+                    href: /v2/actions
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /schedules:
+    get:
+      tags: [schedules]
+      summary: List schedules
+      description: List schedules for the project (project_id from Keystone token). Supports marker/limit pagination.
+      operationId: listSchedules
+      parameters:
+        - $ref: '#/components/parameters/Marker'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      tags: [schedules]
+      summary: Create schedule
+      description: Create a new schedule for recurring actions. project_id is derived from the Keystone token.
+      operationId: createSchedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleCreate'
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /schedules/{schedule_id}:
+    get:
+      tags: [schedules]
+      summary: Show schedule
+      description: Return a single schedule by ID.
+      operationId: showSchedule
+      parameters:
+        - $ref: '#/components/parameters/ScheduleId'
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      tags: [schedules]
+      summary: Update schedule
+      description: Update an existing schedule. Only provided fields are updated.
+      operationId: updateSchedule
+      parameters:
+        - $ref: '#/components/parameters/ScheduleId'
+      requestBody:
+        content:
+          application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleUpdate'
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags: [schedules]
+      summary: Delete schedule
+      description: Permanently delete a schedule and stop future runs.
+      operationId: deleteSchedule
+      parameters:
+        - $ref: '#/components/parameters/ScheduleId'
+      responses:
+        '204':
+          description: No Content
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /jobs:
+    get:
+      tags: [jobs]
+      summary: List jobs
+      description: List jobs for the project. Supports marker/limit pagination.
+      operationId: listJobs
+      parameters:
+        - $ref: '#/components/parameters/Marker'
+        - $ref: '#/components/parameters/Limit'
+        - name: schedule_id
+          in: query
+          description: Filter jobs by schedule ID
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          description: Filter jobs by status
+          schema:
+            $ref: '#/components/schemas/JobStatus'
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      tags: [jobs]
+      summary: Create job
+      description: Create a job from a schedule.
+      operationId: createJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobCreate'
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /jobs/{job_id}:
+    get:
+      tags: [jobs]
+      summary: Show job
+      description: Return a single job by ID including status and execution metadata.
+      operationId: showJob
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags: [jobs]
+      summary: Cancel job
+      description: Cancel a job (valid for QUEUED or PROCESSING).
+      operationId: cancelJob
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '204':
+          description: No Content
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /jobs/{job_id}/executions:
+    get:
+      tags: [job-executions]
+      summary: List job executions
+      description: List executions for a job. Supports marker/limit pagination.
+      operationId: listJobExecutions
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/Marker'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobExecutionList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /jobs/{job_id}/executions/{execution_id}:
+    get:
+      tags: [job-executions]
+      summary: Show job execution
+      description: Return a single job execution by ID with detailed result or error info.
+      operationId: showJobExecution
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/ExecutionId'
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobExecution'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /actions:
+    get:
+      tags: [actions]
+      summary: List actions
+      description: List available action types (read-only registry). Supports marker/limit pagination.
+      operationId: listActions
+      parameters:
+        - $ref: '#/components/parameters/Marker'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /actions/{action_type}:
+    get:
+      tags: [actions]
+      summary: Show action
+      description: Get details for a single action type (schema for action_parameters, etc.).
+      operationId: showAction
+      parameters:
+        - $ref: '#/components/parameters/ActionType'
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Action'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      description: Service health endpoint.
+      operationId: showHealth
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /health/live:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      description: Liveness probe for orchestrators
+      operationId: showHealthLive
+      security: []
+      responses:
+        '200':
+          description: Service is alive
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthLive'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /health/ready:
+    get:
+      tags: [health]
+      summary: Readiness probe
+      description: Readiness probe; returns 200 when service can accept traffic.
+      operationId: showHealthReady
+      security: []
+      responses:
+        '200':
+          description: Service is ready to accept traffic
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthReady'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    X-Auth-Token:
+      type: apiKey
+      in: header
+      name: X-Auth-Token
+      description: |
+        Keystone authentication token. The project_id and roles are derived from the
+        token. RBAC is enforced via keystone policies.
+
+  headers:
+    XOpenstackRequestId:
+      description: Unique request identifier for tracing and debugging. Included in all responses.
+      schema:
+        type: string
+    Location:
+      description: URI of the newly created resource. Included in 201 Created responses.
+      schema:
+        type: string
+        format: uri
+
+  parameters:
+    Marker:
+      name: marker
+      in: query
+      description: The ID of the last seen item. Results start after this ID.
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      description: Maximum number of items to return.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+    ScheduleId:
+      name: schedule_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ExecutionId:
+      name: execution_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ActionType:
+      name: action_type
+      in: path
+      required: true
+      description: Action type identifier (e.g. snapshot, backup)
+      schema:
+        type: string
+        maxLength: 100
+
+  schemas:
+    Schedule:
+      type: object
+      required:
+        - id
+        - project_id
+        - name
+        - action_type
+        - cron_expression
+        - action_parameters
+        - enabled
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        project_id:
+          type: string
+          readOnly: true
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          nullable: true
+          maxLength: 4096
+        action_type:
+          type: string
+          enum:
+            - snapshot
+          description: |
+            Must be one of the registered action types from /actions. Validation must check against
+            the /actions registry at runtime.
+        cron_expression:
+          type: string
+          description: |
+            Cron expression defining when the schedule runs (e.g. five fields: minute hour day-of-month month day-of-week).
+            Example "0 2 * * *" runs daily at 02:00. Validated server-side per runtime cron implementation.
+          maxLength: 255
+          example: "0 2 * * *"
+        action_parameters:
+          type: object
+          description: |
+            Structured JSON validated against the action_parameters_schema for the specified action_type.
+            The schema is available via GET /actions/{action_type}. Server-side validation ensures that
+            the parameters conform to the schema.
+            
+            For action_type: snapshot, the field server_id is required.
+            Example: {"server_id": "123e4567-e89b-12d3-a456-426614174000"}
+          additionalProperties: true
+          example:
+            server_id: "123e4567-e89b-12d3-a456-426614174000"
+        retention_policy:
+          $ref: '#/components/schemas/RetentionPolicy'
+        enabled:
+          type: boolean
+        next_run_at:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+        last_run_at:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    RetentionPolicy:
+      type: object
+      description: |
+        First-class retention policy with count and age options. At least one of count or
+        age_seconds must be specified. If both are provided, retention applies to items that
+        meet either condition.
+      properties:
+        count:
+          type: integer
+          minimum: 1
+          description: Maximum number of items to retain.
+        age_seconds:
+          type: integer
+          minimum: 1
+          description: Maximum age in seconds to retain.
+      anyOf:
+        - required: [count]
+        - required: [age_seconds]
+
+    ScheduleCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - action_type
+        - cron_expression
+        - action_parameters
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          nullable: true
+          maxLength: 4096
+        action_type:
+          type: string
+          enum:
+            - snapshot
+          maxLength: 100
+          description: Must be a registered action type from /actions.
+        cron_expression:
+          type: string
+          description: "Cron expression (five fields: minute hour day-of-month month day-of-week). e.g. \"0 2 * * *\" = daily at 02:00."
+          maxLength: 255
+          example: "0 2 * * *"
+        action_parameters:
+          type: object
+          description: |
+            Must conform to the action_parameters_schema for the specified action_type
+            (available via GET /actions/{action_type}). Server-side validation enforced.
+
+            For action_type: snapshot, the field server_id is required.
+            Example: {"server_id": "123e4567-e89b-12d3-a456-426614174000"}
+          additionalProperties: true
+          example:
+            server_id: "123e4567-e89b-12d3-a456-426614174000"
+        retention_policy:
+          $ref: '#/components/schemas/RetentionPolicy'
+        enabled:
+          type: boolean
+          default: true
+
+    ScheduleUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          nullable: true
+          maxLength: 4096
+        cron_expression:
+          type: string
+          description: "Cron expression (five fields: minute hour day-of-month month day-of-week). e.g. \"0 2 * * *\" = daily at 02:00."
+          maxLength: 255
+        action_parameters:
+          type: object
+          description: |
+            Must conform to the action_parameters_schema for the specified action_type
+            (available via GET /actions/{action_type}). Server-side validation enforced.
+
+            For action_type: snapshot, the field server_id is required.
+            Example: {"server_id": "123e4567-e89b-12d3-a456-426614174000"}
+          additionalProperties: true
+          example:
+            server_id: "123e4567-e89b-12d3-a456-426614174000"
+        retention_policy:
+          $ref: '#/components/schemas/RetentionPolicy'
+        enabled:
+          type: boolean
+
+    ScheduleList:
+      type: object
+      required: [schedules]
+      properties:
+        schedules:
+          type: array
+          items:
+            $ref: '#/components/schemas/Schedule'
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaginationLink'
+          description: Pagination links (first, last, next, prev, self).
+
+    JobStatus:
+      type: string
+      enum:
+        - QUEUED
+        - PROCESSING
+        - DONE
+        - TIMED_OUT
+        - ERROR
+        - CANCELLED
+        - HARD_TIMED_OUT
+        - MAX_RETRIED
+      description: |
+        Full job state machine. Valid state transitions:
+        
+        **Initial State:**
+        - Jobs are created in QUEUED state
+        
+        **From QUEUED:**
+        - QUEUED -> PROCESSING (when worker picks up the job)
+        - QUEUED -> CANCELLED (user cancels before processing starts)
+        
+        **From PROCESSING:**
+        - PROCESSING -> DONE (successful completion)
+        - PROCESSING -> ERROR (execution failure)
+        - PROCESSING -> TIMED_OUT (soft timeout exceeded)
+        - PROCESSING -> HARD_TIMED_OUT (hard timeout exceeded)
+        - PROCESSING -> CANCELLED (user cancels during execution)
+        
+        **Retry Logic (if retries enabled):**
+        - ERROR -> PROCESSING (retry attempt)
+        - TIMED_OUT -> PROCESSING (retry attempt)
+        - ERROR -> MAX_RETRIED (retry limit exceeded)
+        - TIMED_OUT -> MAX_RETRIED (retry limit exceeded)
+        
+        **Terminal States:**
+        - DONE, CANCELLED, HARD_TIMED_OUT, MAX_RETRIED
+
+    Job:
+      type: object
+      required:
+        - id
+        - schedule_id
+        - project_id
+        - action_type
+        - action_parameters
+        - status
+        - run_at
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        schedule_id:
+          type: string
+          format: uuid
+          description: ID of the schedule this job was created from. All jobs are created from schedules.
+        project_id:
+          type: string
+          description: Derived from the Keystone token; required for multi-tenant isolation.
+          readOnly: true
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        action_type:
+          type: string
+          enum:
+            - snapshot
+          maxLength: 100
+          description: Inherited from the schedule. Must be a registered action type from /actions.
+        action_parameters:
+          type: object
+          description: |
+            Inherited from the schedule. Must conform to the action_parameters_schema for this action_type
+            (available via GET /actions/{action_type}). Server-side validation enforced.
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        run_at:
+          type: string
+          format: date-time
+          description: Calculated from the schedule's cron expression. When the job should run.
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+        retry_count:
+          type: integer
+          minimum: 0
+        error_message:
+          type: string
+          nullable: true
+          maxLength: 4096
+
+    JobCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - schedule_id
+      properties:
+        schedule_id:
+          type: string
+          format: uuid
+          description: ID of the schedule to create a job from. The job inherits action_type, action_parameters, and run_at from the schedule.
+
+    JobList:
+      type: object
+      required: [jobs]
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Job'
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaginationLink'
+
+    JobExecution:
+      type: object
+      required:
+        - id
+        - job_id
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        job_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+        result:
+          type: object
+          additionalProperties: true
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+          maxLength: 4096
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    JobExecutionList:
+      type: object
+      required: [executions]
+      properties:
+        executions:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobExecution'
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaginationLink'
+
+    Action:
+      type: object
+      description: Read-only registry entry for an available action type.
+      required:
+        - action_type
+        - name
+      properties:
+        action_type:
+          type: string
+          maxLength: 100
+          description: Identifier used in schedules/jobs (e.g. snapshot, backup).
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Human-readable name.
+        description:
+          type: string
+          nullable: true
+          maxLength: 4096
+        action_parameters_schema:
+          type: object
+          description: |
+            JSON Schema that defines the structure and validation rules for action_parameters
+            when using the specified action_type. Clients must provide action_parameters that conform
+            to this schema. Server-side validation enforces compliance.
+            
+            For action_type: snapshot, the schema requires server_id (UUID of the server/instance to snapshot).
+            Example schema: {"type": "object", "required": ["server_id"], "properties": {"server_id": {"type": "string", "format": "uuid"}}}
+          additionalProperties: true
+          example:
+            type: object
+            required: [server_id]
+            properties:
+              server_id:
+                type: string
+                format: uuid
+                description: UUID of the server/instance to snapshot
+
+    ActionList:
+      type: object
+      required: [actions]
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Action'
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaginationLink'
+
+    Health:
+      type: object
+      required:
+        - status
+        - version
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+          maxLength: 50
+        details:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    HealthLive:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [alive]
+
+    HealthReady:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+          description: '"ready" for 200 OK, "not_ready" for 503 Service Unavailable'
+
+    PaginationLink:
+      type: object
+      required: [rel, href]
+      additionalProperties: false
+      properties:
+        rel:
+          type: string
+          enum: [self, first, prev, next, last]
+          description: Link relation type for pagination.
+        href:
+          type: string
+          format: uri
+          description: URI of the linked resource.
+
+    ErrorLink:
+      type: object
+      required: [rel, href]
+      additionalProperties: false
+      properties:
+        rel:
+          type: string
+          enum: [help]
+          description: Relationship; errors typically provide a help link to documentation.
+        href:
+          type: string
+          format: uri
+          description: URI of the linked resource.
+
+    ErrorItem:
+      type: object
+      required: [code, status, title, detail, links]
+      additionalProperties: false
+      properties:
+        request_id:
+          type: string
+          maxLength: 100
+          description: Matches X-Openstack-Request-Id response header.
+        code:
+          type: string
+          pattern: '^[a-z0-9._-]+$'
+          maxLength: 100
+          description: Service-specific error code.
+        status:
+          type: integer
+          description: HTTP status for this problem.
+        title:
+          type: string
+          maxLength: 255
+          description: Short human-readable summary.
+        detail:
+          type: string
+          maxLength: 4096
+          description: Explanation specific to this occurrence.
+        links:
+          type: array
+          minItems: 1
+          description: Links to additional information.
+          items:
+            $ref: '#/components/schemas/ErrorLink'
+
+    ErrorResponse:
+      type: object
+      required: [errors]
+      properties:
+        errors:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ErrorItem'
+          description: Ordered list, most recent error first.
+
+  responses:
+    BadRequest:
+      description: Bad Request
+      headers:
+        X-Openstack-Request-Id:
+          $ref: '#/components/headers/XOpenstackRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: qonos.validation_error
+                status: 400
+                title: Validation Error
+                detail: "cron_expression: Invalid format."
+                links:
+                  - rel: help
+                    href: "https://api.example.com/qonos/errors/qonos.validation_error"
+    Unauthorized:
+      description: Unauthorized (missing or invalid X-Auth-Token)
+      headers:
+        X-Openstack-Request-Id:
+          $ref: '#/components/headers/XOpenstackRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: qonos.unauthorized
+                status: 401
+                title: Unauthorized
+                detail: "Authentication credentials are missing or invalid."
+                links:
+                  - rel: help
+                    href: "https://docs.example.com/qonos/errors/qonos.unauthorized"
+    Forbidden:
+      description: Forbidden (valid token but insufficient permissions / RBAC policy violation)
+      headers:
+        X-Openstack-Request-Id:
+          $ref: '#/components/headers/XOpenstackRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: qonos.forbidden
+                status: 403
+                title: Forbidden
+                detail: "You do not have permission to perform this action. Required role: scheduler_admin."
+                links:
+                  - rel: help
+                    href: "https://api.example.com/qonos/errors/qonos.forbidden"
+    NotFound:
+      description: Not Found
+      headers:
+        X-Openstack-Request-Id:
+          $ref: '#/components/headers/XOpenstackRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: qonos.schedule.not_found
+                status: 404
+                title: Not Found
+                detail: Schedule with id xxx was not found.
+                links:
+                  - rel: help
+                    href: "https://api.example.com/qonos/errors/qonos.schedule.not_found"
+    Conflict:
+      description: Conflict
+      headers:
+        X-Openstack-Request-Id:
+          $ref: '#/components/headers/XOpenstackRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            duplicate_name:
+              summary: Duplicate schedule name
+              value:
+                errors:
+                  - code: qonos.schedule.duplicate_name
+                    status: 409
+                    title: Conflict
+                    detail: A schedule with name "daily-backup" already exists for this project.
+                    links:
+                      - rel: help
+                        href: "https://api.example.com/qonos/errors/qonos.schedule.duplicate_name"
+            active_jobs:
+              summary: Schedule has active jobs
+              value:
+                errors:
+                  - code: qonos.schedule.has_active_jobs
+                    status: 409
+                    title: Conflict
+                    detail: Schedule cannot be deleted because it has active jobs (QUEUED or PROCESSING).
+                    links:
+                      - rel: help
+                        href: "https://api.example.com/qonos/errors/qonos.schedule.has_active_jobs"
+    InternalServerError:
+      description: Internal Server Error (unexpected server error)
+      headers:
+        X-Openstack-Request-Id:
+          $ref: '#/components/headers/XOpenstackRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: qonos.internal_error
+                status: 500
+                title: Internal Server Error
+                detail: An unexpected error occurred while processing the request.
+                links:
+                  - rel: help
+                    href: "https://api.example.com/qonos/errors/qonos.internal_error"
+    ServiceUnavailable:
+      description: Service Unavailable (e.g. service not ready, temporarily unavailable)
+      headers:
+        X-Openstack-Request-Id:
+          $ref: '#/components/headers/XOpenstackRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: qonos.service_unavailable
+                status: 503
+                title: Service Unavailable
+                detail: The service is temporarily unavailable or not ready.
+                links:
+                  - rel: help
+                    href: "https://api.example.com/qonos/errors/qonos.service_unavailable"
