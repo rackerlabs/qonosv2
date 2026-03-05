@@ -39,8 +39,8 @@ class ActionType(Base):
   updated_at: Mapped[datetime] = mapped_column(
     sa.DateTime(timezone=False),
     nullable=False,
-    server_default=func.current_timestamp(),
-    onupdate=func.current_timestamp(),
+    server_default=sa.func.current_timestamp(),
+    onupdate=sa.func.current_timestamp(),
   )
 
 
@@ -66,8 +66,8 @@ class Schedule(Base):
   updated_at: Mapped[datetime] = mapped_column(
     sa.DateTime(timezone=False),
     nullable=False,
-    server_default=func.current_timestamp(),
-    onupdate=func.current_timestamp(),
+    server_default=sa.func.current_timestamp(),
+    onupdate=sa.func.current_timestamp(),
   )
   deleted_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=False), nullable=True)
 
@@ -107,8 +107,8 @@ class Job(Base):
   updated_at: Mapped[datetime] = mapped_column(
     sa.DateTime(timezone=False),
     nullable=False,
-    server_default=func.current_timestamp(),
-    onupdate=func.current_timestamp(),
+    server_default=sa.func.current_timestamp(),
+    onupdate=sa.func.current_timestamp(),
   )
   cancelled_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=False), nullable=True)
   completed_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=False), nullable=True)
