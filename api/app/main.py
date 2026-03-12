@@ -15,7 +15,7 @@ from .auth.keystone_client import HttpKeystoneClient, KeystoneClient
 from .auth.middleware import KeystoneAuthMiddleware
 from .config import get_config
 from .routes_actions import router as actions_router
-from .routes_health import router as health_router, router_v2 as health_router_v2
+from .routes_health import router as health_router
 from .routes_jobs import router as jobs_router
 from .routes_schedules import router as schedules_router
 from .db import close_db_engine
