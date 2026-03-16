@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
+from croniter import croniter
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,13 +26,74 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _compute_next_run_at(cron_expression: str, *, now: Optional[datetime] = None) -> datetime:
+    """Compute the next run time for a standard 5-field cron expression."""
+    base = now or _utcnow()
+    try:
+        itr = croniter(cron_expression, base)
+        return itr.get_next(datetime)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid cron_expression: unsupported or malformed cron syntax.",
+        )
+
+
+def _validate_action_parameters(params: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    """Validate action_parameters against a minimal JSON-schema-like definition."""
+    if not isinstance(params, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="action_parameters must be an object.",
+        )
+
+    if schema.get("type") == "object":
+        required = schema.get("required", [])
+        missing = [name for name in required if name not in params]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Missing required action_parameters fields: {', '.join(missing)}",
+            )
+
+        properties = schema.get("properties", {})
+        for name, prop_schema in properties.items():
+            if name not in params or "type" not in prop_schema:
+                continue
+            expected_type = prop_schema["type"]
+            value = params[name]
+            if expected_type == "string" and not isinstance(value, str):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"action_parameters.{name} must be a string.",
+                )
+            if expected_type == "integer" and not isinstance(value, int):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"action_parameters.{name} must be an integer.",
+                )
+            if expected_type == "boolean" and not isinstance(value, bool):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"action_parameters.{name} must be a boolean.",
+                )
+            if expected_type == "number" and not isinstance(value, (int, float)):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"action_parameters.{name} must be a number.",
+                )
+
 @router.get(
     "/schedules",
     response_model=ScheduleList,
 )
 async def list_schedules(
-    marker: Optional[str] = Query(default=None, description="Pagination marker."),
+    marker: Optional[str] = Query(default=None, description="Schedule ID to use as pagination cursor."),
     limit: int = Query(default=100, ge=1, le=1000),
+    action_type: Optional[str] = Query(default=None, description="Filter by action_type."),
+    enabled: Optional[bool] = Query(default=None, description="Filter by enabled flag."),
+    next_run_before: Optional[datetime] = Query(default=None, description="Filter by next_run_at before this time."),
+    next_run_after: Optional[datetime] = Query(default=None, description="Filter by next_run_at after this time."),
     auth: AuthContext = Depends(require_policy("schedule:read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScheduleList:
@@ -39,7 +101,19 @@ async def list_schedules(
     if not auth.is_admin:
         stmt = stmt.where(ScheduleModel.project_id == auth.project_id)
 
-    stmt = stmt.limit(limit)
+    if action_type is not None:
+        stmt = stmt.where(ScheduleModel.action_type == action_type)
+    if enabled is not None:
+        stmt = stmt.where(ScheduleModel.enabled == enabled)
+    if next_run_before is not None:
+        stmt = stmt.where(ScheduleModel.next_run_at < next_run_before)
+    if next_run_after is not None:
+        stmt = stmt.where(ScheduleModel.next_run_at > next_run_after)
+
+    if marker is not None:
+        stmt = stmt.where(ScheduleModel.id > marker)
+
+    stmt = stmt.order_by(ScheduleModel.id).limit(limit)
     result = await session.execute(stmt)
     rows = result.scalars().all()
 
@@ -71,8 +145,12 @@ async def create_schedule(
             detail=f"Unknown action_type: {payload.action_type}",
         )
 
+    # Validate action_parameters against the registered schema for this action_type.
+    _validate_action_parameters(payload.action_parameters, action.action_parameters_schema)
+
     schedule_id = str(uuid4())
     now = _utcnow()
+    next_run_at = _compute_next_run_at(payload.cron_expression, now=now)
     schedule_row = ScheduleModel(
         id=schedule_id,
         project_id=auth.project_id,
@@ -83,7 +161,7 @@ async def create_schedule(
         action_parameters=payload.action_parameters,
         retention_policy=payload.retention_policy.model_dump() if payload.retention_policy else None,
         enabled=payload.enabled,
-        next_run_at=None,
+        next_run_at=next_run_at,
         last_run_at=None,
         created_at=now,
         updated_at=now,
@@ -147,6 +225,7 @@ async def show_schedule(
 )
 async def update_schedule(
     schedule_id: str = Path(..., description="Schedule ID"),
+    request: Request = None,
     payload: ScheduleUpdate | None = None,
     auth: AuthContext = Depends(require_policy("schedule:update")),
     session: AsyncSession = Depends(get_db_session),
@@ -155,19 +234,112 @@ async def update_schedule(
     ensure_schedule_access_allowed(schedule, auth)
 
     if payload is not None:
+        try:
+            raw_body = await request.json()
+        except Exception:
+            raw_body = {}
+        readonly_attempts = [
+            field for field in ("id", "project_id", "created_at", "deleted_at") if field in raw_body
+        ]
+        if readonly_attempts:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Read-only fields may not be updated: {', '.join(readonly_attempts)}",
+            )
+
         update_data = payload.model_dump(exclude_unset=True)
         if "action_parameters" in update_data and update_data["action_parameters"] is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ErrorMessages.ACTION_PARAMETERS_NULL,
             )
+
+        # If cron_expression is updated, recompute next_run_at.
+        if "cron_expression" in update_data and update_data["cron_expression"] is not None:
+            schedule.cron_expression = update_data["cron_expression"]
+            schedule.next_run_at = _compute_next_run_at(schedule.cron_expression, now=_utcnow())
+            update_data.pop("cron_expression")
+
+        # If action_parameters are updated, validate against the action schema.
+        if "action_parameters" in update_data and update_data["action_parameters"] is not None:
+            # Look up the action schema based on the existing schedule.action_type.
+            try:
+                action_result = await session.execute(
+                    select(ActionTypeModel).where(ActionTypeModel.action_type == schedule.action_type)
+                )
+                action = action_result.scalar_one_or_none()
+            except OperationalError as e:
+                raise_for_db_error(e)
+
+            if action is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unknown action_type: {schedule.action_type}",
+                )
+
+            _validate_action_parameters(update_data["action_parameters"], action.action_parameters_schema)
+
         for field, value in update_data.items():
-            if field == "retention_policy" and value is not None:
-                setattr(schedule, field, value)
-            else:
-                setattr(schedule, field, value)
+            setattr(schedule, field, value)
+
         schedule.updated_at = _utcnow()
 
+        session.add(schedule)
+        try:
+            await session.commit()
+        except (IntegrityError, OperationalError) as e:
+            await session.rollback()
+            raise_for_db_error(e)
+        await session.refresh(schedule)
+
+    return Schedule.model_validate(schedule)
+
+
+@router.patch(
+    "/schedules/{schedule_id}/enable",
+    response_model=Schedule,
+)
+async def enable_schedule(
+    schedule_id: str = Path(..., description="Schedule ID"),
+    auth: AuthContext = Depends(require_policy("schedule:update")),
+    session: AsyncSession = Depends(get_db_session),
+) -> Schedule:
+    schedule = await get_schedule_or_404(schedule_id, session)
+    ensure_schedule_access_allowed(schedule, auth)
+
+    if not schedule.enabled:
+        schedule.enabled = True
+        # If enabling and next_run_at is empty, compute from current cron.
+        if schedule.next_run_at is None:
+            schedule.next_run_at = _compute_next_run_at(schedule.cron_expression, now=_utcnow())
+        schedule.updated_at = _utcnow()
+
+        session.add(schedule)
+        try:
+            await session.commit()
+        except (IntegrityError, OperationalError) as e:
+            await session.rollback()
+            raise_for_db_error(e)
+        await session.refresh(schedule)
+
+    return Schedule.model_validate(schedule)
+
+
+@router.patch(
+    "/schedules/{schedule_id}/disable",
+    response_model=Schedule,
+)
+async def disable_schedule(
+    schedule_id: str = Path(..., description="Schedule ID"),
+    auth: AuthContext = Depends(require_policy("schedule:update")),
+    session: AsyncSession = Depends(get_db_session),
+) -> Schedule:
+    schedule = await get_schedule_or_404(schedule_id, session)
+    ensure_schedule_access_allowed(schedule, auth)
+
+    if schedule.enabled:
+        schedule.enabled = False
+        schedule.updated_at = _utcnow()
         session.add(schedule)
         try:
             await session.commit()
