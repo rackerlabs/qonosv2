@@ -16,6 +16,9 @@ class AppConfig:
     keystone_verify_ssl: bool = True
     db_url: Optional[str] = None
     policy_file: Optional[str] = None
+    poll_interval_seconds: float = 1.0
+    log_level: str = "INFO"
+    log_dir: Optional[str] = None
 
 
 def _read_secret_file(path: str) -> str:
@@ -41,6 +44,14 @@ def get_config() -> AppConfig:
             return parser.get(section, option)
         return default
 
+    def get_float(section: str, option: str, default: float) -> float:
+        if parser.has_option(section, option):
+            try:
+                return float(parser.get(section, option))
+            except ValueError:
+                return default
+        return default
+
     def get_bool(section: str, option: str, default: bool) -> bool:
         if parser.has_option(section, option):
             try:
@@ -55,6 +66,11 @@ def get_config() -> AppConfig:
         keystone_verify_ssl=get_bool("keystone", "verify_ssl", True),
         db_url=get_str("database", "url", None),
         policy_file=get_str("policy", "file", None),
+        poll_interval_seconds=max(
+            0.1, get_float("scheduler", "poll_interval_seconds", 1.0)
+        ),
+        log_level=(get_str("scheduler", "log_level", "INFO") or "INFO").upper(),
+        log_dir=get_str("scheduler", "log_dir", None),
     )
 
     keystone_admin_token_file = get_str("keystone", "admin_token_file", None)
