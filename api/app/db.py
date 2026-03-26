@@ -33,6 +33,14 @@ def _init_engine() -> None:
     )
 
 
+def get_session_factory() -> sessionmaker:
+    """Return the initialized SQLAlchemy AsyncSession factory."""
+    if _engine is None:
+        _init_engine()
+    assert _session_factory is not None
+    return _session_factory
+
+
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency that yields an AsyncSession."""
     if _engine is None:

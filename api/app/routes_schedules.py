@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
-from croniter import croniter
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth.context import AuthContext
 from .auth.rbac import require_policy
+from .utils.cron import compute_next_run_at, utc_now
 from .db_errors import raise_for_db_error
 from .db import get_db_session
 from .error_constants import ErrorMessages
@@ -22,21 +22,15 @@ from db.src.models import ActionType as ActionTypeModel, Schedule as ScheduleMod
 router = APIRouter(prefix="/v2", tags=["schedules"])
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 def _compute_next_run_at(cron_expression: str, *, now: Optional[datetime] = None) -> datetime:
-    """Compute the next run time for a standard 5-field cron expression."""
-    base = now or _utcnow()
+    """Compute next run for API handlers; maps invalid cron to HTTP 400."""
     try:
-        itr = croniter(cron_expression, base)
-        return itr.get_next(datetime)
-    except Exception:
+        return compute_next_run_at(cron_expression, now=now)
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid cron_expression: unsupported or malformed cron syntax.",
-        )
+            detail=str(exc),
+        ) from exc
 
 
 def _validate_action_parameters(params: Dict[str, Any], schema: Dict[str, Any]) -> None:
@@ -149,7 +143,7 @@ async def create_schedule(
     _validate_action_parameters(payload.action_parameters, action.action_parameters_schema)
 
     schedule_id = str(uuid4())
-    now = _utcnow()
+    now = utc_now()
     next_run_at = _compute_next_run_at(payload.cron_expression, now=now)
     schedule_row = ScheduleModel(
         id=schedule_id,
@@ -257,7 +251,7 @@ async def update_schedule(
         # If cron_expression is updated, recompute next_run_at.
         if "cron_expression" in update_data and update_data["cron_expression"] is not None:
             schedule.cron_expression = update_data["cron_expression"]
-            schedule.next_run_at = _compute_next_run_at(schedule.cron_expression, now=_utcnow())
+            schedule.next_run_at = _compute_next_run_at(schedule.cron_expression, now=utc_now())
             update_data.pop("cron_expression")
 
         # If action_parameters are updated, validate against the action schema.
@@ -282,7 +276,7 @@ async def update_schedule(
         for field, value in update_data.items():
             setattr(schedule, field, value)
 
-        schedule.updated_at = _utcnow()
+        schedule.updated_at = utc_now()
 
         session.add(schedule)
         try:
@@ -311,8 +305,8 @@ async def enable_schedule(
         schedule.enabled = True
         # If enabling and next_run_at is empty, compute from current cron.
         if schedule.next_run_at is None:
-            schedule.next_run_at = _compute_next_run_at(schedule.cron_expression, now=_utcnow())
-        schedule.updated_at = _utcnow()
+            schedule.next_run_at = _compute_next_run_at(schedule.cron_expression, now=utc_now())
+        schedule.updated_at = utc_now()
 
         session.add(schedule)
         try:
@@ -339,7 +333,7 @@ async def disable_schedule(
 
     if schedule.enabled:
         schedule.enabled = False
-        schedule.updated_at = _utcnow()
+        schedule.updated_at = utc_now()
         session.add(schedule)
         try:
             await session.commit()
@@ -363,7 +357,7 @@ async def delete_schedule(
     schedule = await get_schedule_or_404(schedule_id, session)
     ensure_schedule_access_allowed(schedule, auth)
 
-    schedule.deleted_at = _utcnow()
+    schedule.deleted_at = utc_now()
     session.add(schedule)
     try:
         await session.commit()
