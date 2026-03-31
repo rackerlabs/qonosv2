@@ -8,6 +8,7 @@ from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
 
+from api.app.messaging.redis_stream import publish_job_queued
 from api.app.config import get_config
 from api.app.db import get_session_factory
 from api.app.logging import configure_logging
@@ -134,6 +135,29 @@ async def _create_job_for_schedule_cas(session: AsyncSession, schedule: Schedule
         str(now),
         str(now),
     )
+
+    cfg = get_config()
+    if cfg.redis_enabled and cfg.redis_url:
+        try:
+            await publish_job_queued(
+                redis_url=cfg.redis_url,
+                stream=cfg.redis_stream,
+                job_id=job_id,
+                action_type=schedule.action_type,
+                project_id=schedule.project_id,
+                max_len=cfg.redis_stream_max_len,
+            )
+            logger.info(
+                "scheduler event decision=published_job_queued job_id=%s stream=%s",
+                job_id,
+                cfg.redis_stream,
+            )
+        except Exception as exc:
+            logger.warning(
+                "scheduler event decision=publish_failed job_id=%s error=%s",
+                job_id,
+                str(exc),
+            )
 
 
 def _poll_interval_seconds() -> float:
