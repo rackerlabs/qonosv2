@@ -6,6 +6,7 @@ from db.src.models import Job as JobModel
 
 from .handlers import ActionHandler, HandlerRegistry
 from .registry import register_handler
+from .server_snapshot_handler import ServerSnapshotActionHandler
 
 
 class SnapshotActionHandler(ActionHandler):
@@ -21,4 +22,5 @@ class SnapshotActionHandler(ActionHandler):
 
 def register_builtin_handlers(registry: HandlerRegistry) -> None:
     register_handler(registry, action_type="snapshot")(SnapshotActionHandler)
+    register_handler(registry, action_type="server_snapshot")(ServerSnapshotActionHandler)
 

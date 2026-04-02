@@ -41,6 +41,9 @@ class AppConfig:
 
     worker_stale_processing_sweep_interval_seconds: float = 120.0
     worker_stale_processing_after_seconds: Optional[float] = None
+    server_snapshot_default_image_name_prefix: str = "qonos-snapshot"
+    server_snapshot_poll_interval_seconds: float = 5.0
+    server_snapshot_poll_timeout_seconds: float = 600.0
 
     redis_enabled: bool = False
     redis_url: Optional[str] = None
@@ -128,6 +131,16 @@ def get_config() -> AppConfig:
             None
             if not parser.has_option("worker", "stale_processing_after_seconds")
             else max(0.1, get_float("worker", "stale_processing_after_seconds", 0.0))
+        ),
+        server_snapshot_default_image_name_prefix=(
+            get_str("worker", "server_snapshot_default_image_name_prefix", "qonos-snapshot")
+            or "qonos-snapshot"
+        ),
+        server_snapshot_poll_interval_seconds=max(
+            0.1, get_float("worker", "server_snapshot_poll_interval_seconds", 5.0)
+        ),
+        server_snapshot_poll_timeout_seconds=max(
+            0.1, get_float("worker", "server_snapshot_poll_timeout_seconds", 600.0)
         ),
         redis_url=get_str("redis", "url", None),
         redis_enabled=get_bool("redis", "enabled", False),
