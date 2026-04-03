@@ -12,7 +12,8 @@ from api.app.messaging.redis_stream import publish_job_queued
 from api.app.config import get_config
 from api.app.db import get_session_factory
 from api.app.logging import configure_logging
-from api.app.utils.cron import compute_next_run_at, utc_now
+from api.app.utils.cron import compute_next_run_at
+from api.app.utils.time import utc_now
 from db.src.models import Job as JobModel, JobStatus as JobStatusModel, Schedule as ScheduleModel
 
 logger = logging.getLogger("qonos.scheduler")

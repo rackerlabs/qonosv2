@@ -9,10 +9,7 @@ ENTRYPOINT_GROUP = "qonos.action_handlers"
 
 
 def load_entrypoint_handlers(registry: HandlerRegistry) -> None:
-    """Load handler classes via Python entry points.
-
-    Each entry point name is treated as the action_type.
-    """
+    """Load ActionHandler classes from entry points."""
     try:
         eps = metadata.entry_points()
         group = eps.select(group=ENTRYPOINT_GROUP)
@@ -39,6 +36,7 @@ def register_handler(
 
 
 def build_registry(*, extra_registry: Optional[HandlerRegistry] = None) -> HandlerRegistry:
+    """Create a registry and load entry-point handlers."""
     registry = extra_registry or HandlerRegistry()
     load_entrypoint_handlers(registry)
     return registry

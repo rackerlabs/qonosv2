@@ -41,7 +41,6 @@ class AppConfig:
 
     worker_stale_processing_sweep_interval_seconds: float = 120.0
     worker_stale_processing_after_seconds: Optional[float] = None
-    server_snapshot_default_image_name_prefix: str = "qonos-snapshot"
     server_snapshot_poll_interval_seconds: float = 5.0
     server_snapshot_poll_timeout_seconds: float = 600.0
 
@@ -132,10 +131,6 @@ def get_config() -> AppConfig:
             if not parser.has_option("worker", "stale_processing_after_seconds")
             else max(0.1, get_float("worker", "stale_processing_after_seconds", 0.0))
         ),
-        server_snapshot_default_image_name_prefix=(
-            get_str("worker", "server_snapshot_default_image_name_prefix", "qonos-snapshot")
-            or "qonos-snapshot"
-        ),
         server_snapshot_poll_interval_seconds=max(
             0.1, get_float("worker", "server_snapshot_poll_interval_seconds", 5.0)
         ),
@@ -145,11 +140,7 @@ def get_config() -> AppConfig:
         redis_url=get_str("redis", "url", None),
         redis_enabled=get_bool("redis", "enabled", False),
         redis_stream=get_str("redis", "stream", "qonos:jobs") or "qonos:jobs",
-        redis_stream_max_len=(
-            None
-            if not parser.has_option("redis", "stream_max_len")
-            else max(1, get_int("redis", "stream_max_len", 10000))
-        ),
+        redis_stream_max_len=10000,
         redis_consumer_group=(
             get_str("redis", "consumer_group", "qonos-workers") or "qonos-workers"
         ),
@@ -167,6 +158,13 @@ def get_config() -> AppConfig:
 
     if (cfg.redis_consumer_name or "").strip().lower() == "auto":
         cfg.redis_consumer_name = f"{socket.gethostname()}-{os.getpid()}"
+
+    if parser.has_option("redis", "stream_max_len"):
+        _rmax = get_int("redis", "stream_max_len", 0)
+        cfg.redis_stream_max_len = None if _rmax <= 0 else max(1, _rmax)
+    else:
+        cfg.redis_stream_max_len = 10000
+
 
     return cfg
 

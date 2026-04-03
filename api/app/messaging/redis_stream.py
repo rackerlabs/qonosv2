@@ -17,17 +17,21 @@ async def publish_job_queued(
 
     redis = Redis.from_url(redis_url, decode_responses=True)
     try:
-        await redis.xadd(
-            stream,
-            {
-                "event": "job_queued",
-                "job_id": job_id,
-                "action_type": action_type,
-                "project_id": project_id,
-            },
-            maxlen=max_len,
-            approximate=True if max_len is not None else None,
-        )
+        fields = {
+            "event": "job_queued",
+            "job_id": job_id,
+            "action_type": action_type,
+            "project_id": project_id,
+        }
+        if max_len is not None:
+            await redis.xadd(
+                stream,
+                fields,
+                maxlen=max_len,
+                approximate=True,
+            )
+        else:
+            await redis.xadd(stream, fields)
     finally:
         await redis.aclose()
 

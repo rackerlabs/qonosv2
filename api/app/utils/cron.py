@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from croniter import croniter
 
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+from .time import utc_now
 
 
 def compute_next_run_at(cron_expression: str, *, now: Optional[datetime] = None) -> datetime:

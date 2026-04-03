@@ -34,10 +34,10 @@ class ActionType(Base):
   action_parameters_schema: Mapped[dict[str, Any]] = mapped_column(sa.JSON, nullable=False)
   enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
   created_at: Mapped[datetime] = mapped_column(
-    sa.DateTime(timezone=False), nullable=False, server_default=sa.func.current_timestamp()
+    sa.DateTime(timezone=True), nullable=False, server_default=sa.func.current_timestamp()
   )
   updated_at: Mapped[datetime] = mapped_column(
-    sa.DateTime(timezone=False),
+    sa.DateTime(timezone=True),
     nullable=False,
     server_default=sa.func.current_timestamp(),
     onupdate=sa.func.current_timestamp(),
@@ -58,18 +58,18 @@ class Schedule(Base):
   action_parameters: Mapped[dict[str, Any]] = mapped_column(sa.JSON, nullable=False)
   retention_policy: Mapped[Optional[dict[str, Any]]] = mapped_column(sa.JSON, nullable=True)
   enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
-  next_run_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=False), nullable=True)
-  last_run_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=False), nullable=True)
+  next_run_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+  last_run_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
   created_at: Mapped[datetime] = mapped_column(
-    sa.DateTime(timezone=False), nullable=False, server_default=sa.func.current_timestamp()
+    sa.DateTime(timezone=True), nullable=False, server_default=sa.func.current_timestamp()
   )
   updated_at: Mapped[datetime] = mapped_column(
-    sa.DateTime(timezone=False),
+    sa.DateTime(timezone=True),
     nullable=False,
     server_default=sa.func.current_timestamp(),
     onupdate=sa.func.current_timestamp(),
   )
-  deleted_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=False), nullable=True)
+  deleted_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
 
 sa.Index(
@@ -92,26 +92,26 @@ class Job(Base):
   project_id: Mapped[str] = mapped_column(sa.CHAR(36), nullable=False, index=True)
   action_type: Mapped[str] = mapped_column(sa.String(100), nullable=False)
   action_parameters: Mapped[dict[str, Any]] = mapped_column(sa.JSON, nullable=False)
-  run_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=False), nullable=False)
+  run_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
   status: Mapped[JobStatus] = mapped_column(
     sa.Enum(JobStatus, name="job_status"), nullable=False, default=JobStatus.QUEUED
   )
   version: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1)
-  started_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=False), nullable=True)
-  ended_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=False), nullable=True)
+  started_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+  ended_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
   retry_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
   error_message: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
   created_at: Mapped[datetime] = mapped_column(
-    sa.DateTime(timezone=False), nullable=False, server_default=sa.func.current_timestamp()
+    sa.DateTime(timezone=True), nullable=False, server_default=sa.func.current_timestamp()
   )
   updated_at: Mapped[datetime] = mapped_column(
-    sa.DateTime(timezone=False),
+    sa.DateTime(timezone=True),
     nullable=False,
     server_default=sa.func.current_timestamp(),
     onupdate=sa.func.current_timestamp(),
   )
-  cancelled_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=False), nullable=True)
-  completed_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=False), nullable=True)
+  cancelled_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+  completed_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
 
 sa.Index("jobs_project_id_run_at_idx", Job.project_id, Job.run_at)
@@ -126,14 +126,14 @@ class JobFault(Base):
   job_id: Mapped[str] = mapped_column(sa.CHAR(36), sa.ForeignKey("jobs.id"), nullable=False, index=True)
   project_id: Mapped[str] = mapped_column(sa.CHAR(36), nullable=False, index=True)
   occurred_at: Mapped[datetime] = mapped_column(
-    sa.DateTime(timezone=False), nullable=False, server_default=sa.func.current_timestamp()
+    sa.DateTime(timezone=True), nullable=False, server_default=sa.func.current_timestamp()
   )
   code: Mapped[str] = mapped_column(sa.String(100), nullable=False)
   title: Mapped[str] = mapped_column(sa.String(255), nullable=False)
   detail: Mapped[str] = mapped_column(sa.Text, nullable=False)
   extra: Mapped[Optional[dict[str, Any]]] = mapped_column(sa.JSON, nullable=True)
   created_at: Mapped[datetime] = mapped_column(
-    sa.DateTime(timezone=False), nullable=False, server_default=sa.func.current_timestamp()
+    sa.DateTime(timezone=True), nullable=False, server_default=sa.func.current_timestamp()
   )
 
 sa.Index("job_faults_job_id_idx", JobFault.job_id, JobFault.occurred_at)

@@ -18,16 +18,13 @@ from api.app.messaging.redis_stream import consume_job_events
 from api.app.config import AppConfig, get_config
 from api.app.db import close_db_engine, get_session_factory
 from api.app.logging import configure_logging
+from api.app.utils.time import as_utc_aware, utc_now
 from api.app.worker.builtin_handlers import register_builtin_handlers
 from api.app.worker.handlers import ActionHandler, HandlerRegistry
 from api.app.worker.registry import build_registry
-from db.src.models import Job as JobModel, JobStatus as JobStatusModel
+from db.src.models import Job as JobModel, JobFault as JobFaultModel, JobStatus as JobStatusModel
 
 logger = logging.getLogger("qonos.worker")
-
-
-def _utcnow() -> datetime:
-    return datetime.utcnow()
 
 
 ALLOWED_TRANSITIONS: dict[JobStatusModel, set[JobStatusModel]] = {
@@ -90,7 +87,7 @@ class WorkerRuntime:
         try:
             while not self._stop.is_set():
                 await self._dispatch_once()
-                now = _utcnow()
+                now = utc_now()
                 interval = self.cfg.worker_stale_processing_sweep_interval_seconds
                 if self._last_stale_sweep_at is None or (
                     now - self._last_stale_sweep_at
@@ -132,28 +129,58 @@ class WorkerRuntime:
         if slots <= 0:
             return
 
-        now = _utcnow()
-        async with self.session_factory() as session:
-            result = await session.execute(
-                select(JobModel)
-                .where(
-                    JobModel.status == JobStatusModel.QUEUED,
-                    JobModel.action_type.in_(supported),
-                    JobModel.run_at <= now,
-                )
-                .order_by(JobModel.run_at.asc())
-                .limit(slots * 2)
-            )
-            candidates = result.scalars().all()
+        now = utc_now()
+        claimed_job_ids = await self._claim_due_jobs_batch(
+            supported=supported,
+            now=now,
+            slots=slots,
+        )
 
-        for job in candidates:
+        for job_id in claimed_job_ids:
             if self.metrics.inflight >= self.cfg.worker_concurrency:
                 break
-            claimed = await self._claim_job(job_id=job.id, expected_version=job.version)
-            if not claimed:
-                continue
             self.metrics.claimed += 1
-            await self._spawn(self._process_claimed_job(job.id))
+            await self._spawn(self._process_claimed_job(job_id))
+
+    async def _claim_due_jobs_batch(
+        self,
+        *,
+        supported: list[str],
+        now: datetime,
+        slots: int,
+    ) -> list[str]:
+        """Claim due QUEUED jobs in one transaction for higher throughput."""
+        _assert_transition(JobStatusModel.QUEUED, JobStatusModel.PROCESSING)
+        async with self.session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(JobModel.id)
+                    .where(
+                        JobModel.status == JobStatusModel.QUEUED,
+                        JobModel.action_type.in_(supported),
+                        JobModel.run_at <= now,
+                    )
+                    .order_by(JobModel.run_at.asc())
+                    .limit(max(1, slots))
+                    .with_for_update(skip_locked=True)
+                )
+                job_ids = [row[0] for row in result.all()]
+                if not job_ids:
+                    return []
+                await session.execute(
+                    update(JobModel)
+                    .where(
+                        JobModel.id.in_(job_ids),
+                        JobModel.status == JobStatusModel.QUEUED,
+                    )
+                    .values(
+                        status=JobStatusModel.PROCESSING,
+                        started_at=now,
+                        updated_at=now,
+                        version=JobModel.version + 1,
+                    )
+                )
+                return job_ids
 
     async def on_job_queued_event(self, job_id: str) -> None:
         self._wake.set()
@@ -166,7 +193,7 @@ class WorkerRuntime:
             claimed = await self._claim_job(job_id=job.id, expected_version=job.version)
             if claimed:
                 self.metrics.claimed += 1
-                await self._run_in_slot(self._process_claimed_job(job.id))
+                await self._spawn(self._process_claimed_job(job.id))
 
     async def _run_in_slot(self, coro: Any) -> None:
         await self._sem.acquire()
@@ -192,7 +219,7 @@ class WorkerRuntime:
 
     async def _claim_job(self, *, job_id: str, expected_version: int) -> bool:
         _assert_transition(JobStatusModel.QUEUED, JobStatusModel.PROCESSING)
-        now = _utcnow()
+        now = utc_now()
         async with self.session_factory() as session:
             stmt = (
                 update(JobModel)
@@ -243,7 +270,7 @@ class WorkerRuntime:
             .values(
                 status=to_status,
                 version=JobModel.version + 1,
-                updated_at=_utcnow(),
+                updated_at=utc_now(),
                 **values,
             )
         )
@@ -256,11 +283,41 @@ class WorkerRuntime:
         job.version += 1
         return True
 
+    async def _record_fault(
+        self,
+        *,
+        job: JobModel,
+        code: str,
+        title: str,
+        detail: str,
+        extra: Optional[dict[str, Any]] = None,
+    ) -> None:
+        try:
+            async with self.session_factory() as session:
+                fault = JobFaultModel(
+                    job_id=job.id,
+                    project_id=job.project_id,
+                    code=code,
+                    title=title[:255],
+                    detail=detail,
+                    extra=extra,
+                    occurred_at=utc_now(),
+                    created_at=utc_now(),
+                )
+                session.add(fault)
+                await session.commit()
+        except Exception as exc:
+            logger.warning(
+                "job fault decision=record_failed job_id=%s error=%s",
+                job.id,
+                str(exc),
+            )
+
     async def _reclaim_stale_processing_once(self) -> None:
         supported = self.registry.supported_action_types()
         if not supported:
             return
-        now = _utcnow()
+        now = utc_now()
         after = self.cfg.worker_stale_processing_after_seconds
         cutoff = now - timedelta(seconds=after)
         async with self.session_factory() as session:
@@ -283,7 +340,7 @@ class WorkerRuntime:
         supported = self.registry.supported_action_types()
         if not supported:
             return
-        now = _utcnow()
+        now = utc_now()
         cutoff = now - timedelta(seconds=self.cfg.worker_hard_timeout_seconds)
         async with self.session_factory() as session:
             result = await session.execute(
@@ -304,7 +361,7 @@ class WorkerRuntime:
 
     async def _mark_hard_timed_out(self, *, job_id: str, expected_version: int, cutoff: datetime) -> None:
         _assert_transition(JobStatusModel.PROCESSING, JobStatusModel.HARD_TIMED_OUT)
-        now = _utcnow()
+        now = utc_now()
         async with self.session_factory() as session:
             stmt = (
                 update(JobModel)
@@ -332,11 +389,20 @@ class WorkerRuntime:
             await session.commit()
             self.metrics.hard_timed_out += 1
             logger.warning("job timeout decision=hard_timeout_sweep job_id=%s", job_id)
+            job = await self._load_job(session, job_id)
+            if job is not None:
+                await self._record_fault(
+                    job=job,
+                    code="qonos.job.hard_timeout_sweep",
+                    title="Hard timeout exceeded (sweep)",
+                    detail="hard timeout exceeded (sweep)",
+                    extra={"action_type": job.action_type, "schedule_id": job.schedule_id},
+                )
 
     async def _reclaim_one_stale_job(
         self, *, job_id: str, expected_version: int, cutoff: datetime
     ) -> None:
-        now = _utcnow()
+        now = utc_now()
         async with self.session_factory() as session:
             job = await self._load_job(session, job_id)
             if not job or job.status != JobStatusModel.PROCESSING:
@@ -345,7 +411,7 @@ class WorkerRuntime:
                 return
             if job.action_type not in self.registry.supported_action_types():
                 return
-            if job.started_at is not None and job.started_at >= cutoff:
+            if job.started_at is not None and as_utc_aware(job.started_at) >= cutoff:
                 return
 
             if job.retry_count >= self.cfg.worker_max_retry:
@@ -378,6 +444,13 @@ class WorkerRuntime:
                     "job reclaim decision=stale_processing_max_retried job_id=%s project_id=%s",
                     job.id,
                     job.project_id,
+                )
+                await self._record_fault(
+                    job=job,
+                    code="qonos.job.stale_processing_max_retried",
+                    title="Stale processing: retry limit exceeded",
+                    detail="stale processing: max retries exceeded",
+                    extra={"action_type": job.action_type, "schedule_id": job.schedule_id},
                 )
                 return
 
@@ -449,7 +522,7 @@ class WorkerRuntime:
                 return
 
             outcome, err = await self._execute_with_timeouts(handler, job)
-            now = _utcnow()
+            now = utc_now()
 
             if outcome == "done":
                 ok = await self._transition(
@@ -475,6 +548,13 @@ class WorkerRuntime:
                 )
                 if ok:
                     self.metrics.hard_timed_out += 1
+                    await self._record_fault(
+                        job=job,
+                        code="qonos.job.hard_timeout",
+                        title="Hard timeout exceeded",
+                        detail="hard timeout exceeded",
+                        extra={"action_type": job.action_type, "schedule_id": job.schedule_id},
+                    )
                     with suppress(Exception):
                         await handler.on_timeout(job)
                 return
@@ -541,7 +621,7 @@ class WorkerRuntime:
         call_hook: bool,
         handler: Optional[ActionHandler] = None,
     ) -> None:
-        now = _utcnow()
+        now = utc_now()
         err_text = str(error)
         transitioned = await self._transition(
             session=session,
@@ -552,6 +632,27 @@ class WorkerRuntime:
         )
         if not transitioned:
             return
+
+        await self._record_fault(
+            job=job,
+            code=(
+                "qonos.job.timeout"
+                if failure_status == JobStatusModel.TIMED_OUT
+                else "qonos.job.error"
+            ),
+            title=(
+                "Job timed out"
+                if failure_status == JobStatusModel.TIMED_OUT
+                else "Job failed"
+            ),
+            detail=err_text,
+            extra={
+                "action_type": job.action_type,
+                "schedule_id": job.schedule_id,
+                "status": failure_status.value,
+                "retry_count": job.retry_count,
+            },
+        )
 
         if call_hook and handler is not None:
             with suppress(Exception):
@@ -569,7 +670,14 @@ class WorkerRuntime:
                 job=job,
                 from_status=failure_status,
                 to_status=JobStatusModel.MAX_RETRIED,
-                values={"ended_at": _utcnow()},
+                values={"ended_at": utc_now()},
+            )
+            await self._record_fault(
+                job=job,
+                code="qonos.job.max_retried",
+                title="Retry limit exceeded",
+                detail=f"retry limit exceeded (max_retry={self.cfg.worker_max_retry})",
+                extra={"action_type": job.action_type, "schedule_id": job.schedule_id},
             )
             return
 
@@ -579,7 +687,7 @@ class WorkerRuntime:
         )
         if self.cfg.worker_backoff_jitter and delay > 0:
             delay = random.uniform(0.0, delay)
-        next_run = _utcnow() + timedelta(seconds=delay)
+        next_run = utc_now() + timedelta(seconds=delay)
         ok = await self._transition(
             session=session,
             job=job,

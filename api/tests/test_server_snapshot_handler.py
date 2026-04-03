@@ -34,11 +34,18 @@ class _FakeImageAPI:
     def __init__(self, statuses: list[str]) -> None:
         self._statuses = list(statuses)
         self._idx = 0
+        self.deleted: list[str] = []
 
     def get_image(self, image_id: str):
         status = self._statuses[min(self._idx, len(self._statuses) - 1)]
         self._idx += 1
         return SimpleNamespace(id=image_id, status=status)
+
+    def delete_image(self, image_id: str, ignore_missing: bool = True):
+        self.deleted.append(image_id)
+
+    def images(self, owner: str | None = None):
+        return []
 
 
 class _FakeConn:
@@ -62,7 +69,6 @@ def _cfg(**kwargs):
         keystone_url="http://keystone:5000/v3",
         keystone_admin_token="svc-token",
         keystone_verify_ssl=False,
-        server_snapshot_default_image_name_prefix="qonos-snapshot",
         server_snapshot_poll_interval_seconds=0.01,
         server_snapshot_poll_timeout_seconds=0.2,
     )
@@ -77,14 +83,15 @@ async def test_server_snapshot_success(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = _FakeConn(compute, _FakeImageAPI(["QUEUED", "ACTIVE"]))
     monkeypatch.setattr("api.app.worker.server_snapshot_handler.get_config", lambda: _cfg())
     monkeypatch.setattr(handler, "_build_connection", lambda project_id: conn)
+    job = _job(str(uuid4()))
 
-    result = await handler.execute(_job(str(uuid4())))
+    result = await handler.execute(job)
 
     assert result["image_id"] == "img-123"
     assert result["status"] == "ACTIVE"
-    assert compute.created_name.startswith("qonos-snapshot-srv-a-")
-    assert compute.created_metadata["created_by"] == "qonosv2"
+    assert compute.created_name.startswith("qonos-server_snapshot-srv-a-")
     assert compute.created_metadata["qonos_managed"] == "true"
+    assert compute.created_metadata["qonos_job_id"] == job.id
 
 
 @pytest.mark.anyio
@@ -124,6 +131,7 @@ async def test_server_snapshot_polling_timeout(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(TimeoutError, match="Snapshot polling timed out"):
         await handler.execute(_job(str(uuid4())))
+    assert conn.image.deleted == ["img-123"]
 
 
 @pytest.mark.anyio
@@ -152,3 +160,36 @@ async def test_server_snapshot_failed_image_statuses(
 
     with pytest.raises(RuntimeError, match=failed_status):
         await handler.execute(_job(str(uuid4())))
+    assert conn.image.deleted == ["img-123"]
+
+
+@pytest.mark.anyio
+async def test_server_snapshot_reuses_existing_image_for_same_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ReuseImageAPI(_FakeImageAPI):
+        def images(self, owner: str | None = None):
+            return [
+                SimpleNamespace(
+                    id="img-existing",
+                    name="qonos-snapshot-srv-a-existing",
+                    status="QUEUED",
+                    properties={"qonos_job_id": self._job_id},
+                )
+            ]
+
+    handler = ServerSnapshotActionHandler()
+    compute = _FakeCompute(server_exists=True)
+    image_api = _ReuseImageAPI(["ACTIVE"])
+    conn = _FakeConn(compute, image_api)
+    job = _job(str(uuid4()))
+    image_api._job_id = job.id
+
+    monkeypatch.setattr("api.app.worker.server_snapshot_handler.get_config", lambda: _cfg())
+    monkeypatch.setattr(handler, "_build_connection", lambda project_id: conn)
+
+    result = await handler.execute(job)
+
+    assert result["image_id"] == "img-existing"
+    assert result["status"] == "ACTIVE"
+    assert compute.created_name is None
