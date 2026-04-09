@@ -1,8 +1,8 @@
 INSERT IGNORE INTO action_types (action_type, name, description, action_parameters_schema, enabled)
 VALUES (
-  'snapshot',
-  'Snapshot',
-  'Create a snapshot for a server',
+  'server_snapshot',
+  'Server snapshot',
+  'Create a Glance image snapshot of a Nova server instance',
   JSON_OBJECT(
     'type','object',
     'properties', JSON_OBJECT('server_id', JSON_OBJECT('type','string')),
@@ -13,4 +13,3 @@ VALUES (
 );
 
 INSERT IGNORE INTO schema_migrations (version) VALUES ('0002_seed_action_types');
-

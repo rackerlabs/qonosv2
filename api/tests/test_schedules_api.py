@@ -21,7 +21,7 @@ async def test_create_schedule_invalid_cron_expression_returns_400(
     body = {
         "name": f"invalid-cron-{uuid4()}",
         "description": "Invalid cron test",
-        "action_type": "snapshot",
+        "action_type": "server_snapshot",
         "cron_expression": "invalid cron",
         "action_parameters": {"server_id": "srv-1"},
         "enabled": True,
@@ -39,11 +39,11 @@ async def test_create_schedule_invalid_cron_expression_returns_400(
 async def test_create_schedule_missing_required_action_parameter_returns_400(
     async_client: httpx.AsyncClient,
 ) -> None:
-    # For action_type=snapshot, server_id is required by action_parameters_schema.
+    # For action_type=server_snapshot, server_id is required by action_parameters_schema.
     body = {
         "name": f"missing-param-{uuid4()}",
         "description": "Missing server_id",
-        "action_type": "snapshot",
+        "action_type": "server_snapshot",
         "cron_expression": "0 2 * * *",
         "action_parameters": {},
         "enabled": True,
@@ -61,11 +61,11 @@ async def test_create_schedule_missing_required_action_parameter_returns_400(
 async def test_create_schedule_invalid_action_parameter_type_returns_400(
     async_client: httpx.AsyncClient,
 ) -> None:
-    # For action_type=snapshot, server_id must be a string.
+    # For action_type=server_snapshot, server_id must be a string.
     body = {
         "name": f"bad-param-type-{uuid4()}",
         "description": "server_id wrong type",
-        "action_type": "snapshot",
+        "action_type": "server_snapshot",
         "cron_expression": "0 2 * * *",
         "action_parameters": {"server_id": 123},
         "enabled": True,
@@ -85,7 +85,7 @@ async def test_schedule_list_filters_and_pagination(async_client: httpx.AsyncCli
     body1 = {
         "name": f"list-test-a-{uuid4()}",
         "description": "List filter test A",
-        "action_type": "snapshot",
+        "action_type": "server_snapshot",
         "cron_expression": "0 1 * * *",
         "action_parameters": {"server_id": "srv-a"},
         "enabled": True,
@@ -93,7 +93,7 @@ async def test_schedule_list_filters_and_pagination(async_client: httpx.AsyncCli
     body2 = {
         "name": f"list-test-b-{uuid4()}",
         "description": "List filter test B",
-        "action_type": "snapshot",
+        "action_type": "server_snapshot",
         "cron_expression": "0 2 * * *",
         "action_parameters": {"server_id": "srv-b"},
         "enabled": False,
@@ -152,7 +152,7 @@ async def test_update_schedule_readonly_fields_rejected(async_client: httpx.Asyn
     body = {
         "name": f"readonly-test-{uuid4()}",
         "description": "Read-only test",
-        "action_type": "snapshot",
+        "action_type": "server_snapshot",
         "cron_expression": "0 2 * * *",
         "action_parameters": {"server_id": "srv-ro"},
         "enabled": True,
@@ -185,7 +185,7 @@ async def test_enable_disable_schedule_and_authz(async_client: httpx.AsyncClient
     body = {
         "name": f"enable-disable-{uuid4()}",
         "description": "Enable/disable test",
-        "action_type": "snapshot",
+        "action_type": "server_snapshot",
         "cron_expression": "0 2 * * *",
         "action_parameters": {"server_id": "srv-1"},
         "enabled": False,

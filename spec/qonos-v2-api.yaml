@@ -566,7 +566,7 @@ components:
       name: action_type
       in: path
       required: true
-      description: Action type identifier (e.g. snapshot, backup)
+      description: Action type identifier (e.g. server_snapshot, backup)
       schema:
         type: string
         maxLength: 100
@@ -603,7 +603,7 @@ components:
         action_type:
           type: string
           enum:
-            - snapshot
+            - server_snapshot
           description: |
             Must be one of the registered action types from /actions. Validation must check against
             the /actions registry at runtime.
@@ -621,7 +621,7 @@ components:
             The schema is available via GET /actions/{action_type}. Server-side validation ensures that
             the parameters conform to the schema.
             
-            For action_type: snapshot, the field server_id is required.
+            For action_type: server_snapshot, the field server_id is required.
             Example: {"server_id": "123e4567-e89b-12d3-a456-426614174000"}
           additionalProperties: true
           example:
@@ -688,7 +688,7 @@ components:
         action_type:
           type: string
           enum:
-            - snapshot
+            - server_snapshot
           maxLength: 100
           description: Must be a registered action type from /actions.
         cron_expression:
@@ -702,7 +702,7 @@ components:
             Must conform to the action_parameters_schema for the specified action_type
             (available via GET /actions/{action_type}). Server-side validation enforced.
 
-            For action_type: snapshot, the field server_id is required.
+            For action_type: server_snapshot, the field server_id is required.
             Example: {"server_id": "123e4567-e89b-12d3-a456-426614174000"}
           additionalProperties: true
           example:
@@ -735,7 +735,7 @@ components:
             Must conform to the action_parameters_schema for the specified action_type
             (available via GET /actions/{action_type}). Server-side validation enforced.
 
-            For action_type: snapshot, the field server_id is required.
+            For action_type: server_snapshot, the field server_id is required.
             Example: {"server_id": "123e4567-e89b-12d3-a456-426614174000"}
           additionalProperties: true
           example:
@@ -826,7 +826,7 @@ components:
         action_type:
           type: string
           enum:
-            - snapshot
+            - server_snapshot
           maxLength: 100
           description: Inherited from the schedule. Must be a registered action type from /actions.
         action_parameters:
@@ -951,7 +951,7 @@ components:
         action_type:
           type: string
           maxLength: 100
-          description: Identifier used in schedules/jobs (e.g. snapshot, backup).
+          description: Identifier used in schedules/jobs (e.g. server_snapshot, backup).
         name:
           type: string
           minLength: 1
@@ -968,7 +968,7 @@ components:
             when using the specified action_type. Clients must provide action_parameters that conform
             to this schema. Server-side validation enforces compliance.
             
-            For action_type: snapshot, the schema requires server_id (UUID of the server/instance to snapshot).
+            For action_type: server_snapshot, the schema requires server_id (UUID of the server/instance to snapshot).
             Example schema: {"type": "object", "required": ["server_id"], "properties": {"server_id": {"type": "string", "format": "uuid"}}}
           additionalProperties: true
           example:

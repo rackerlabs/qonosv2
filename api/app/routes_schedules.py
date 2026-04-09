@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth.context import AuthContext
 from .auth.rbac import require_policy
-from .utils.cron import compute_next_run_at, utc_now
+from .utils.cron import compute_next_run_at
+from .utils.time import utc_now
 from .db_errors import raise_for_db_error
 from .db import get_db_session
 from .error_constants import ErrorMessages

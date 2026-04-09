@@ -72,7 +72,7 @@ async def test_schedule_project_scoping_and_cross_tenant_forbidden(
     body = {
         "name": f"daily-backup-{uuid4()}",
         "description": "Proj1 backup",
-        "action_type": "snapshot",
+        "action_type": "server_snapshot",
         "cron_expression": "0 2 * * *",
         "action_parameters": {"server_id": "srv-1"},
         "enabled": True,
@@ -144,7 +144,7 @@ async def test_schedule_project_scoping_and_cross_tenant_forbidden(
     body2 = {
         "name": f"daily-backup-manager-{uuid4()}",
         "description": "Proj1 backup (manager delete)",
-        "action_type": "snapshot",
+        "action_type": "server_snapshot",
         "cron_expression": "0 2 * * *",
         "action_parameters": {"server_id": "srv-1"},
         "enabled": True,
@@ -169,7 +169,7 @@ async def test_job_creation_and_cross_tenant_access(async_client: httpx.AsyncCli
     body = {
         "name": f"job-source-schedule-{uuid4()}",
         "description": "Proj1 job schedule",
-        "action_type": "snapshot",
+        "action_type": "server_snapshot",
         "cron_expression": "0 3 * * *",
         "action_parameters": {"server_id": "srv-2"},
         "enabled": True,
