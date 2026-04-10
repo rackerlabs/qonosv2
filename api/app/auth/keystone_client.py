@@ -84,4 +84,3 @@ class HttpKeystoneClient(KeystoneClient):
             roles=project_roles,
             system_roles=system_roles_set if system_roles_set else None,
         )
-

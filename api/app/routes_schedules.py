@@ -19,7 +19,6 @@ from .error_constants import ErrorMessages
 from .schemas import Schedule, ScheduleCreate, ScheduleList, ScheduleUpdate
 from db.src.models import ActionType as ActionTypeModel, Schedule as ScheduleModel
 
-
 router = APIRouter(prefix="/v2", tags=["schedules"])
 
 
@@ -78,17 +77,24 @@ def _validate_action_parameters(params: Dict[str, Any], schema: Dict[str, Any]) 
                     detail=f"action_parameters.{name} must be a number.",
                 )
 
+
 @router.get(
     "/schedules",
     response_model=ScheduleList,
 )
 async def list_schedules(
-    marker: Optional[str] = Query(default=None, description="Schedule ID to use as pagination cursor."),
+    marker: Optional[str] = Query(
+        default=None, description="Schedule ID to use as pagination cursor."
+    ),
     limit: int = Query(default=100, ge=1, le=1000),
     action_type: Optional[str] = Query(default=None, description="Filter by action_type."),
     enabled: Optional[bool] = Query(default=None, description="Filter by enabled flag."),
-    next_run_before: Optional[datetime] = Query(default=None, description="Filter by next_run_at before this time."),
-    next_run_after: Optional[datetime] = Query(default=None, description="Filter by next_run_at after this time."),
+    next_run_before: Optional[datetime] = Query(
+        default=None, description="Filter by next_run_at before this time."
+    ),
+    next_run_after: Optional[datetime] = Query(
+        default=None, description="Filter by next_run_at after this time."
+    ),
     auth: AuthContext = Depends(require_policy("schedule:read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScheduleList:
@@ -154,7 +160,9 @@ async def create_schedule(
         action_type=payload.action_type,
         cron_expression=payload.cron_expression,
         action_parameters=payload.action_parameters,
-        retention_policy=payload.retention_policy.model_dump() if payload.retention_policy else None,
+        retention_policy=(
+            payload.retention_policy.model_dump() if payload.retention_policy else None
+        ),
         enabled=payload.enabled,
         next_run_at=next_run_at,
         last_run_at=None,
@@ -260,7 +268,9 @@ async def update_schedule(
             # Look up the action schema based on the existing schedule.action_type.
             try:
                 action_result = await session.execute(
-                    select(ActionTypeModel).where(ActionTypeModel.action_type == schedule.action_type)
+                    select(ActionTypeModel).where(
+                        ActionTypeModel.action_type == schedule.action_type
+                    )
                 )
                 action = action_result.scalar_one_or_none()
             except OperationalError as e:
@@ -272,7 +282,9 @@ async def update_schedule(
                     detail=f"Unknown action_type: {schedule.action_type}",
                 )
 
-            _validate_action_parameters(update_data["action_parameters"], action.action_parameters_schema)
+            _validate_action_parameters(
+                update_data["action_parameters"], action.action_parameters_schema
+            )
 
         for field, value in update_data.items():
             setattr(schedule, field, value)
@@ -365,4 +377,3 @@ async def delete_schedule(
     except (IntegrityError, OperationalError) as e:
         await session.rollback()
         raise_for_db_error(e)
-

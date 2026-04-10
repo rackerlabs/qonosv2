@@ -228,4 +228,3 @@ async def test_enable_disable_schedule_and_authz(async_client: httpx.AsyncClient
     )
     assert disable_same.status_code == 200, disable_same.text
     assert disable_same.json()["enabled"] is False
-

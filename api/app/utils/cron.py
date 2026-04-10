@@ -20,7 +20,4 @@ def compute_next_run_at(cron_expression: str, *, now: Optional[datetime] = None)
         itr = croniter(cron_expression, base)
         return itr.get_next(datetime)
     except Exception as exc:
-        raise ValueError(
-            "Invalid cron_expression: unsupported or malformed cron syntax."
-        ) from exc
-
+        raise ValueError("Invalid cron_expression: unsupported or malformed cron syntax.") from exc

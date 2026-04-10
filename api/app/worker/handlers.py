@@ -39,4 +39,3 @@ class HandlerRegistry:
 
     def supported_action_types(self) -> list[str]:
         return sorted(self._handlers.keys())
-

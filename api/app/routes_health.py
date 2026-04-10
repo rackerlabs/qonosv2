@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .db import get_db_session
 from .db_errors import raise_for_db_error
 
-
 router = APIRouter(tags=["health"])
 
 
@@ -43,4 +42,3 @@ async def ready(session: AsyncSession = Depends(get_db_session)) -> dict:
         raise_for_db_error(e)
 
     return {"status": "ready", "db_ready": True}
-

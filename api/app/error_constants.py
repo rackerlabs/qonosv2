@@ -68,4 +68,3 @@ def unauthorized_json(detail: Optional[str] = None) -> JSONResponse:
 
 def http_forbidden() -> HTTPException:
     return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ErrorMessages.FORBIDDEN)
-

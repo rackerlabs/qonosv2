@@ -72,8 +72,11 @@ def raise_for_db_error(exc: Exception) -> None:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=ErrorMessages.DB_UNAVAILABLE,
             )
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ErrorMessages.DB_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ErrorMessages.DB_ERROR
+        )
 
     if isinstance(exc, DBAPIError):
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ErrorMessages.DB_ERROR)
-
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ErrorMessages.DB_ERROR
+        )

@@ -82,4 +82,3 @@ def require_policy(action: str):
 
     allowed_roles = _FILE_POLICY.get(action, DEFAULT_POLICY.get(action, []))
     return require_roles(required_roles=allowed_roles, allow_admin=True)
-

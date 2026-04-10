@@ -13,7 +13,6 @@ from .error_constants import ErrorMessages
 from .schemas import Action, ActionList
 from db.src.models import ActionType as ActionTypeModel
 
-
 router = APIRouter(prefix="/v2", tags=["actions"])
 
 
@@ -41,6 +40,7 @@ async def show_action(
     )
     row = result.scalar_one_or_none()
     if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ErrorMessages.ACTION_TYPE_NOT_FOUND)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=ErrorMessages.ACTION_TYPE_NOT_FOUND
+        )
     return Action.model_validate(row)
-

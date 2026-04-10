@@ -19,11 +19,7 @@ class KeystoneAuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable):
         path = request.url.path
-        if (
-            path.startswith("/docs")
-            or path.startswith("/openapi")
-            or path.startswith("/health")
-        ):
+        if path.startswith("/docs") or path.startswith("/openapi") or path.startswith("/health"):
             return await call_next(request)
 
         token = request.headers.get("X-Auth-Token")
@@ -37,4 +33,3 @@ class KeystoneAuthMiddleware(BaseHTTPMiddleware):
 
         request.state.auth = auth_ctx
         return await call_next(request)
-
