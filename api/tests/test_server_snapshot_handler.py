@@ -11,7 +11,9 @@ from api.app.worker.server_snapshot_handler import (
 
 
 class _FakeCompute:
-    def __init__(self, *, server_exists: bool = True, create_error: Exception | None = None) -> None:
+    def __init__(
+        self, *, server_exists: bool = True, create_error: Exception | None = None
+    ) -> None:
         self._server_exists = server_exists
         self._create_error = create_error
         self.created_name = None
@@ -125,7 +127,9 @@ async def test_server_snapshot_polling_timeout(monkeypatch: pytest.MonkeyPatch) 
     conn = _FakeConn(_FakeCompute(server_exists=True), _FakeImageAPI(["QUEUED"]))
     monkeypatch.setattr(
         "api.app.worker.server_snapshot_handler.get_config",
-        lambda: _cfg(server_snapshot_poll_interval_seconds=0.01, server_snapshot_poll_timeout_seconds=0.05),
+        lambda: _cfg(
+            server_snapshot_poll_interval_seconds=0.01, server_snapshot_poll_timeout_seconds=0.05
+        ),
     )
     monkeypatch.setattr(handler, "_build_connection", lambda project_id: conn)
 

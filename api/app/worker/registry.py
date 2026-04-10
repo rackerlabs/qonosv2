@@ -40,4 +40,3 @@ def build_registry(*, extra_registry: Optional[HandlerRegistry] = None) -> Handl
     registry = extra_registry or HandlerRegistry()
     load_entrypoint_handlers(registry)
     return registry
-

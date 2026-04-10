@@ -20,9 +20,7 @@ def configure_logging(*, log_name: str, default_level: str = "INFO") -> None:
 
     root.setLevel(level)
 
-    formatter = logging.Formatter(
-        "%(asctime)s %(process)d %(levelname)s %(name)s [-] %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s %(process)d %(levelname)s %(name)s [-] %(message)s")
 
     def add_stream_handler() -> None:
         if not any(isinstance(h, logging.StreamHandler) for h in root.handlers):
@@ -38,9 +36,7 @@ def configure_logging(*, log_name: str, default_level: str = "INFO") -> None:
             os.makedirs(log_dir, exist_ok=True)
 
             if not any(isinstance(h, logging.FileHandler) for h in root.handlers):
-                file_handler = logging.FileHandler(
-                    log_path, encoding="utf-8", delay=True
-                )
+                file_handler = logging.FileHandler(log_path, encoding="utf-8", delay=True)
                 file_handler.setFormatter(formatter)
                 file_handler.setLevel(level)
                 root.addHandler(file_handler)
@@ -58,4 +54,3 @@ def configure_logging(*, log_name: str, default_level: str = "INFO") -> None:
 
     finally:
         setattr(root, "_qonos_logging_configured", True)
-

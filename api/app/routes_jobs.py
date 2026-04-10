@@ -18,7 +18,6 @@ from .schemas import Job, JobCreate, JobList, JobStatus, JobUpdate
 from .routes_schedules import ensure_schedule_access_allowed, get_schedule_or_404
 from db.src.models import Job as JobModel, JobStatus as JobStatusModel
 
-
 router = APIRouter(prefix="/v2", tags=["jobs"])
 
 
@@ -104,9 +103,7 @@ async def get_job_or_404(
     job_id: str,
     session: AsyncSession,
 ) -> JobModel:
-    result = await session.execute(
-        select(JobModel).where(JobModel.id == job_id)
-    )
+    result = await session.execute(select(JobModel).where(JobModel.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
         raise HTTPException(
@@ -209,4 +206,3 @@ async def cancel_job(
     except (IntegrityError, OperationalError) as e:
         await session.rollback()
         raise_for_db_error(e)
-

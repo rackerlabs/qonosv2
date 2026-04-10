@@ -118,4 +118,3 @@ class Action(BaseModel):
 class ActionList(BaseModel):
     actions: List[Action]
     links: List[Dict[str, Any]] = Field(default_factory=list)
-

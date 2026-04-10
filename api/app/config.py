@@ -108,9 +108,7 @@ def get_config() -> AppConfig:
         keystone_verify_ssl=get_bool("keystone", "verify_ssl", True),
         db_url=get_str("database", "url", None),
         policy_file=get_str("policy", "file", None),
-        poll_interval_seconds=max(
-            0.1, get_float("scheduler", "poll_interval_seconds", 1.0)
-        ),
+        poll_interval_seconds=max(0.1, get_float("scheduler", "poll_interval_seconds", 1.0)),
         log_level=(get_str("scheduler", "log_level", "INFO") or "INFO").upper(),
         log_dir=get_str("scheduler", "log_dir", None),
         worker_concurrency=max(1, get_int("worker", "concurrency", 10)),
@@ -165,6 +163,4 @@ def get_config() -> AppConfig:
     else:
         cfg.redis_stream_max_len = 10000
 
-
     return cfg
-

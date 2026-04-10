@@ -59,7 +59,9 @@ async def consume_job_events(
             if "BUSYGROUP" not in str(exc):
                 raise
 
-        async def handle_message(*, stream_name: str, message_id: str, fields: dict[str, Any]) -> None:
+        async def handle_message(
+            *, stream_name: str, message_id: str, fields: dict[str, Any]
+        ) -> None:
             await sem.acquire()
             try:
                 if fields.get("event") == "job_queued":
@@ -85,7 +87,9 @@ async def consume_job_events(
             for stream_name, entries in data:
                 for message_id, fields in entries:
                     t = asyncio.create_task(
-                        handle_message(stream_name=stream_name, message_id=message_id, fields=fields)
+                        handle_message(
+                            stream_name=stream_name, message_id=message_id, fields=fields
+                        )
                     )
                     tasks.add(t)
 

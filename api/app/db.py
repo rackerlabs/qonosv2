@@ -6,7 +6,6 @@ from sqlalchemy.orm import sessionmaker
 
 from .config import get_config
 
-
 _engine: Optional[AsyncEngine] = None
 _session_factory: Optional[sessionmaker] = None
 
@@ -58,4 +57,3 @@ async def close_db_engine() -> None:
         await _engine.dispose()
         _engine = None
         _session_factory = None
-

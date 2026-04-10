@@ -47,7 +47,9 @@ async def _process_due_schedules(session_factory: sessionmaker) -> None:
             await _create_job_for_schedule_cas(session, schedule, now=now)
 
 
-async def _create_job_for_schedule_cas(session: AsyncSession, schedule: ScheduleModel, *, now) -> None:
+async def _create_job_for_schedule_cas(
+    session: AsyncSession, schedule: ScheduleModel, *, now
+) -> None:
     """Create a QUEUED job and advance the schedule using CAS on next_run_at.
 
     We insert the job and then CAS-update the schedule within the same
@@ -168,9 +170,7 @@ def _poll_interval_seconds() -> float:
 
 async def run_scheduler_loop(poll_interval_seconds: float | None = None) -> None:
     interval = (
-        poll_interval_seconds
-        if poll_interval_seconds is not None
-        else _poll_interval_seconds()
+        poll_interval_seconds if poll_interval_seconds is not None else _poll_interval_seconds()
     )
     session_factory = get_session_factory()
     logger.info(

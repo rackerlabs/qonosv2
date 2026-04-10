@@ -16,15 +16,26 @@ get_config.cache_clear()
 app = create_app()
 
 # Load RBAC test config from JSON (QONOS_TEST_CONFIG_FILE or api/tests/test_config.json)
-_config_path = Path(os.getenv("QONOS_TEST_CONFIG_FILE", str(Path(__file__).resolve().parent / "test_config.json")))
+_config_path = Path(
+    os.getenv("QONOS_TEST_CONFIG_FILE", str(Path(__file__).resolve().parent / "test_config.json"))
+)
 try:
     _config = json.loads(_config_path.read_text()) if _config_path.exists() else None
 except (FileNotFoundError, json.JSONDecodeError, OSError):
     _config = None
-_required = ["admin_token", "project1_member_token", "project2_member_token", "project1_manager_token", "service_token"]
+_required = [
+    "admin_token",
+    "project1_member_token",
+    "project2_member_token",
+    "project1_manager_token",
+    "service_token",
+]
 if not _config or not all(_config.get(k) for k in _required):
     _missing = _required if not _config else [k for k in _required if not _config.get(k)]
-    pytest.skip(f"Test config {_config_path}: missing keys {', '.join(_missing)}. Required: {', '.join(_required)}.", allow_module_level=True)
+    pytest.skip(
+        f"Test config {_config_path}: missing keys {', '.join(_missing)}. Required: {', '.join(_required)}.",
+        allow_module_level=True,
+    )
 
 ADMIN_TOKEN = _config["admin_token"]
 PROJECT1_MEMBER = _config["project1_member_token"]
@@ -270,4 +281,3 @@ async def test_job_creation_and_cross_tenant_access(async_client: httpx.AsyncCli
         headers=_auth({"X-Auth-Token": SERVICE_TOKEN}),
     )
     assert cancel_service.status_code == 204
-

@@ -34,7 +34,9 @@ def create_app(*, keystone_client: KeystoneClient | None = None) -> FastAPI:
     if keystone_client is None:
         cfg = get_config()
         if not cfg.keystone_url or not cfg.keystone_admin_token:
-            raise RuntimeError("Keystone URL and admin token must be configured for HttpKeystoneClient")
+            raise RuntimeError(
+                "Keystone URL and admin token must be configured for HttpKeystoneClient"
+            )
         keystone_client = HttpKeystoneClient(
             base_url=cfg.keystone_url,
             admin_token=cfg.keystone_admin_token,
@@ -51,4 +53,3 @@ def create_app(*, keystone_client: KeystoneClient | None = None) -> FastAPI:
 
 
 app = create_app()
-

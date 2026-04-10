@@ -31,4 +31,3 @@ class AuthContext:
             return True
 
         return False
-

@@ -89,15 +89,18 @@ class WorkerRuntime:
                 await self._dispatch_once()
                 now = utc_now()
                 interval = self.cfg.worker_stale_processing_sweep_interval_seconds
-                if self._last_stale_sweep_at is None or (
-                    now - self._last_stale_sweep_at
-                ).total_seconds() >= interval:
+                if (
+                    self._last_stale_sweep_at is None
+                    or (now - self._last_stale_sweep_at).total_seconds() >= interval
+                ):
                     await self._enforce_hard_timeout_once()
                     await self._reclaim_stale_processing_once()
                     self._last_stale_sweep_at = now
                     self._wake.set()
                 try:
-                    await asyncio.wait_for(self._wake.wait(), timeout=self.cfg.worker_idle_sleep_seconds)
+                    await asyncio.wait_for(
+                        self._wake.wait(), timeout=self.cfg.worker_idle_sleep_seconds
+                    )
                 except asyncio.TimeoutError:
                     pass
                 self._wake.clear()
@@ -334,7 +337,9 @@ class WorkerRuntime:
             candidates = result.scalars().all()
 
         for row in candidates:
-            await self._reclaim_one_stale_job(job_id=row.id, expected_version=row.version, cutoff=cutoff)
+            await self._reclaim_one_stale_job(
+                job_id=row.id, expected_version=row.version, cutoff=cutoff
+            )
 
     async def _enforce_hard_timeout_once(self) -> None:
         supported = self.registry.supported_action_types()
@@ -357,9 +362,13 @@ class WorkerRuntime:
             candidates = result.all()
 
         for job_id, expected_version in candidates:
-            await self._mark_hard_timed_out(job_id=job_id, expected_version=expected_version, cutoff=cutoff)
+            await self._mark_hard_timed_out(
+                job_id=job_id, expected_version=expected_version, cutoff=cutoff
+            )
 
-    async def _mark_hard_timed_out(self, *, job_id: str, expected_version: int, cutoff: datetime) -> None:
+    async def _mark_hard_timed_out(
+        self, *, job_id: str, expected_version: int, cutoff: datetime
+    ) -> None:
         _assert_transition(JobStatusModel.PROCESSING, JobStatusModel.HARD_TIMED_OUT)
         now = utc_now()
         async with self.session_factory() as session:
@@ -640,11 +649,7 @@ class WorkerRuntime:
                 if failure_status == JobStatusModel.TIMED_OUT
                 else "qonos.job.error"
             ),
-            title=(
-                "Job timed out"
-                if failure_status == JobStatusModel.TIMED_OUT
-                else "Job failed"
-            ),
+            title=("Job timed out" if failure_status == JobStatusModel.TIMED_OUT else "Job failed"),
             detail=err_text,
             extra={
                 "action_type": job.action_type,
@@ -793,4 +798,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -7,4 +7,3 @@ This package contains:
 - RBAC helpers for schedule and job operations
 - FastAPI/Starlette middleware for enforcing the X-Auth-Token header
 """
-
