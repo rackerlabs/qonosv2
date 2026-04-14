@@ -78,6 +78,15 @@ def _validate_action_parameters(params: Dict[str, Any], schema: Dict[str, Any]) 
                 )
 
 
+def _normalize_retention_policy_for_storage(
+    payload: ScheduleCreate | ScheduleUpdate,
+) -> Optional[Dict[str, Any]]:
+    """Serialize retention policy without null optional fields."""
+    if payload.retention_policy is None:
+        return None
+    return payload.retention_policy.model_dump(exclude_none=True)
+
+
 @router.get(
     "/schedules",
     response_model=ScheduleList,
@@ -160,9 +169,7 @@ async def create_schedule(
         action_type=payload.action_type,
         cron_expression=payload.cron_expression,
         action_parameters=payload.action_parameters,
-        retention_policy=(
-            payload.retention_policy.model_dump() if payload.retention_policy else None
-        ),
+        retention_policy=_normalize_retention_policy_for_storage(payload),
         enabled=payload.enabled,
         next_run_at=next_run_at,
         last_run_at=None,
@@ -256,6 +263,8 @@ async def update_schedule(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ErrorMessages.ACTION_PARAMETERS_NULL,
             )
+        if "retention_policy" in update_data:
+            update_data["retention_policy"] = _normalize_retention_policy_for_storage(payload)
 
         # If cron_expression is updated, recompute next_run_at.
         if "cron_expression" in update_data and update_data["cron_expression"] is not None:

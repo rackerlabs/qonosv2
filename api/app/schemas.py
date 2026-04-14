@@ -4,12 +4,27 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class RetentionPolicy(BaseModel):
-    count: Optional[int] = Field(default=None, ge=1)
-    age_seconds: Optional[int] = Field(default=None, ge=1)
+    type: str = Field(..., pattern="^(count|age)$")
+    value: Optional[int] = Field(default=None, ge=0)
+    max_age_days: Optional[int] = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> "RetentionPolicy":
+        if self.type == "count":
+            if self.value is None:
+                raise ValueError("retention_policy.value is required when type='count'")
+            if self.max_age_days is not None:
+                raise ValueError("retention_policy.max_age_days is not allowed when type='count'")
+        elif self.type == "age":
+            if self.max_age_days is None:
+                raise ValueError("retention_policy.max_age_days is required when type='age'")
+            if self.value is not None:
+                raise ValueError("retention_policy.value is not allowed when type='age'")
+        return self
 
 
 class ScheduleBase(BaseModel):

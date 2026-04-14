@@ -111,6 +111,7 @@ class ServerSnapshotActionHandler(ActionHandler):
             "qonos_action_type": job.action_type,
             "qonos_job_id": job.id,
             "qonos_project_id": job.project_id,
+            "qonos_schedule_id": job.schedule_id,
         }
 
         existing_image = self._find_existing_job_image(conn, job)
