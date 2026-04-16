@@ -94,6 +94,7 @@ async def test_server_snapshot_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert compute.created_name.startswith("qonos-server_snapshot-srv-a-")
     assert compute.created_metadata["qonos_managed"] == "true"
     assert compute.created_metadata["qonos_job_id"] == job.id
+    assert compute.created_metadata["qonos_schedule_id"] == job.schedule_id
 
 
 @pytest.mark.anyio

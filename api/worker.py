@@ -21,8 +21,14 @@ from api.app.logging import configure_logging
 from api.app.utils.time import as_utc_aware, utc_now
 from api.app.worker.builtin_handlers import register_builtin_handlers
 from api.app.worker.handlers import ActionHandler, HandlerRegistry
+from api.app.worker.retention import run_retention_for_job
 from api.app.worker.registry import build_registry
-from db.src.models import Job as JobModel, JobFault as JobFaultModel, JobStatus as JobStatusModel
+from db.src.models import (
+    Job as JobModel,
+    JobFault as JobFaultModel,
+    JobStatus as JobStatusModel,
+    Schedule as ScheduleModel,
+)
 
 logger = logging.getLogger("qonos.worker")
 
@@ -251,6 +257,33 @@ class WorkerRuntime:
         result = await session.execute(select(JobModel).where(JobModel.id == job_id))
         return result.scalar_one_or_none()
 
+    async def _load_schedule(
+        self, session: AsyncSession, schedule_id: str
+    ) -> Optional[ScheduleModel]:
+        result = await session.execute(select(ScheduleModel).where(ScheduleModel.id == schedule_id))
+        return result.scalar_one_or_none()
+
+    async def _run_retention(self, *, job: JobModel, trigger_status: JobStatusModel) -> None:
+        try:
+            async with self.session_factory() as session:
+                schedule = await self._load_schedule(session, job.schedule_id)
+            if schedule is None:
+                return
+            await run_retention_for_job(
+                action_type=job.action_type,
+                project_id=job.project_id,
+                schedule_id=job.schedule_id,
+                retention_policy_raw=schedule.retention_policy,
+                trigger_status=trigger_status.value,
+            )
+        except Exception as exc:
+            logger.warning(
+                "retention failed decision=non_fatal job_id=%s status=%s error=%s",
+                job.id,
+                trigger_status.value,
+                str(exc),
+            )
+
     async def _transition(
         self,
         *,
@@ -407,6 +440,7 @@ class WorkerRuntime:
                     detail="hard timeout exceeded (sweep)",
                     extra={"action_type": job.action_type, "schedule_id": job.schedule_id},
                 )
+                await self._run_retention(job=job, trigger_status=JobStatusModel.HARD_TIMED_OUT)
 
     async def _reclaim_one_stale_job(
         self, *, job_id: str, expected_version: int, cutoff: datetime
@@ -461,6 +495,7 @@ class WorkerRuntime:
                     detail="stale processing: max retries exceeded",
                     extra={"action_type": job.action_type, "schedule_id": job.schedule_id},
                 )
+                await self._run_retention(job=job, trigger_status=JobStatusModel.MAX_RETRIED)
                 return
 
             _assert_transition(JobStatusModel.PROCESSING, JobStatusModel.QUEUED)
@@ -545,6 +580,7 @@ class WorkerRuntime:
                     self.metrics.completed += 1
                     with suppress(Exception):
                         await handler.on_success(job)
+                    await self._run_retention(job=job, trigger_status=JobStatusModel.DONE)
                 return
 
             if outcome == "hard_timeout":
@@ -566,6 +602,7 @@ class WorkerRuntime:
                     )
                     with suppress(Exception):
                         await handler.on_timeout(job)
+                    await self._run_retention(job=job, trigger_status=JobStatusModel.HARD_TIMED_OUT)
                 return
 
             if outcome == "soft_timeout":
@@ -670,13 +707,15 @@ class WorkerRuntime:
             return
 
         if job.retry_count >= self.cfg.worker_max_retry:
-            await self._transition(
+            moved = await self._transition(
                 session=session,
                 job=job,
                 from_status=failure_status,
                 to_status=JobStatusModel.MAX_RETRIED,
                 values={"ended_at": utc_now()},
             )
+            if not moved:
+                return
             await self._record_fault(
                 job=job,
                 code="qonos.job.max_retried",
@@ -684,6 +723,7 @@ class WorkerRuntime:
                 detail=f"retry limit exceeded (max_retry={self.cfg.worker_max_retry})",
                 extra={"action_type": job.action_type, "schedule_id": job.schedule_id},
             )
+            await self._run_retention(job=job, trigger_status=JobStatusModel.MAX_RETRIED)
             return
 
         delay = min(
