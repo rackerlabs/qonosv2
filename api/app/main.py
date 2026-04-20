@@ -33,13 +33,16 @@ def create_app(*, keystone_client: KeystoneClient | None = None) -> FastAPI:
 
     if keystone_client is None:
         cfg = get_config()
-        if not cfg.keystone_url or not cfg.keystone_admin_token:
-            raise RuntimeError(
-                "Keystone URL and admin token must be configured for HttpKeystoneClient"
-            )
+        if not cfg.keystone_url:
+            raise RuntimeError("Keystone URL must be configured for HttpKeystoneClient")
         keystone_client = HttpKeystoneClient(
             base_url=cfg.keystone_url,
-            admin_token=cfg.keystone_admin_token,
+            auth_mode=cfg.keystone_auth_mode,
+            service_app_credential_id=cfg.keystone_service_app_credential_id,
+            service_app_credential_secret=cfg.keystone_service_app_credential_secret,
+            service_username=cfg.keystone_service_username,
+            service_password=cfg.keystone_service_password,
+            service_user_domain_name=cfg.keystone_service_user_domain_name,
             verify_ssl=cfg.keystone_verify_ssl,
         )
     app.add_middleware(KeystoneAuthMiddleware, keystone_client=keystone_client)

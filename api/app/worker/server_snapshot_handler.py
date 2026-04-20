@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from uuid import UUID
 
 from api.app.config import get_config
+from api.app.openstack_connection import build_openstack_connection
 from db.src.models import Job as JobModel
 
 from .handlers import ActionHandler
@@ -36,23 +37,6 @@ class ServerSnapshotActionHandler(ActionHandler):
 
     async def execute(self, job: JobModel) -> Any:
         return await asyncio.to_thread(self._execute_sync, job)
-
-    def _build_connection(self, *, project_id: str):
-        cfg = get_config()
-        if not cfg.keystone_url or not cfg.keystone_admin_token:
-            raise RuntimeError("Missing Keystone configuration: keystone_url and admin_token")
-        from openstack import connection as os_connection
-
-        return os_connection.Connection(
-            auth_type="v3token",
-            auth={
-                "auth_url": cfg.keystone_url,
-                "token": cfg.keystone_admin_token,
-                "project_id": project_id,
-            },
-            verify=cfg.keystone_verify_ssl,
-            compute_api_version="2",
-        )
 
     def _cleanup_failed_snapshot(self, conn: Any, image_id: str) -> None:
         """Best-effort delete of a snapshot created by a failed job attempt."""
@@ -97,7 +81,7 @@ class ServerSnapshotActionHandler(ActionHandler):
         server_id = str(params["server_id"]).strip()
         default_prefix = f"qonos-{job.action_type}"
         prefix = str(params.get("image_name_prefix") or default_prefix).strip()
-        conn = self._build_connection(project_id=job.project_id)
+        conn = build_openstack_connection(project_id=job.project_id)
 
         server = conn.compute.get_server(server_id)
         if server is None:

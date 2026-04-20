@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from api.app.config import get_config
+from api.app.openstack_connection import build_openstack_connection
 from api.app.utils.time import as_utc_aware, utc_now
 
 logger = logging.getLogger("qonos.worker.retention")
@@ -55,21 +55,7 @@ def parse_retention_policy(raw: Any) -> Optional[RetentionPolicy]:
 
 
 def _build_connection(*, project_id: str):
-    cfg = get_config()
-    if not cfg.keystone_url or not cfg.keystone_admin_token:
-        raise RuntimeError("Missing Keystone configuration: keystone_url and admin_token")
-    from openstack import connection as os_connection
-
-    return os_connection.Connection(
-        auth_type="v3token",
-        auth={
-            "auth_url": cfg.keystone_url,
-            "token": cfg.keystone_admin_token,
-            "project_id": project_id,
-        },
-        verify=cfg.keystone_verify_ssl,
-        compute_api_version="2",
-    )
+    return build_openstack_connection(project_id=project_id)
 
 
 def _parse_created_at(value: Any) -> Optional[datetime]:
