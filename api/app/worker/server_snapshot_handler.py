@@ -79,9 +79,12 @@ class ServerSnapshotActionHandler(ActionHandler):
         cfg = get_config()
         params = job.action_parameters or {}
         server_id = str(params["server_id"]).strip()
+        trust_id = str(params.get("qonos_trust_id") or "").strip() or None
+        if not trust_id:
+            raise RuntimeError("Missing delegated trust context for server_snapshot job execution.")
         default_prefix = f"qonos-{job.action_type}"
         prefix = str(params.get("image_name_prefix") or default_prefix).strip()
-        conn = build_openstack_connection(project_id=job.project_id)
+        conn = build_openstack_connection(project_id=job.project_id, trust_id=trust_id)
 
         server = conn.compute.get_server(server_id)
         if server is None:

@@ -16,6 +16,8 @@ security:
 tags:
   - name: schedules
     description: Core resource for defining recurring actions.
+  - name: execution-profiles
+    description: Delegation profiles used by schedules for trust-based execution.
   - name: jobs
     description: Execution records generated from schedules.
   - name: job-executions
@@ -211,6 +213,158 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /execution-profiles:
+    get:
+      tags: [execution-profiles]
+      summary: List execution profiles
+      description: List execution profiles for the project (project_id from Keystone token).
+      operationId: listExecutionProfiles
+      parameters:
+        - $ref: '#/components/parameters/Marker'
+        - $ref: '#/components/parameters/Limit'
+        - name: enabled
+          in: query
+          description: Filter by enabled flag
+          schema:
+            type: boolean
+        - name: auth_type
+          in: query
+          description: Filter by auth type
+          schema:
+            type: string
+            enum: [trust]
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionProfileList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      tags: [execution-profiles]
+      summary: Create execution profile
+      description: Create a project-scoped execution profile for delegated execution.
+      operationId: createExecutionProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionProfileCreate'
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /execution-profiles/{execution_profile_id}:
+    get:
+      tags: [execution-profiles]
+      summary: Show execution profile
+      description: Return a single execution profile by ID.
+      operationId: showExecutionProfile
+      parameters:
+        - $ref: '#/components/parameters/ExecutionProfileId'
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      tags: [execution-profiles]
+      summary: Update execution profile
+      description: Update an existing execution profile. Only provided fields are updated.
+      operationId: updateExecutionProfile
+      parameters:
+        - $ref: '#/components/parameters/ExecutionProfileId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionProfileUpdate'
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags: [execution-profiles]
+      summary: Delete execution profile
+      description: Soft-delete an execution profile.
+      operationId: deleteExecutionProfile
+      parameters:
+        - $ref: '#/components/parameters/ExecutionProfileId'
+      responses:
+        '204':
+          description: No Content
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
 
@@ -570,6 +724,13 @@ components:
       schema:
         type: string
         maxLength: 100
+    ExecutionProfileId:
+      name: execution_profile_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
 
   schemas:
     Schedule:
@@ -628,6 +789,10 @@ components:
             server_id: "123e4567-e89b-12d3-a456-426614174000"
         retention_policy:
           $ref: '#/components/schemas/RetentionPolicy'
+        execution_profile_id:
+          type: string
+          format: uuid
+          description: Execution profile UUID used for delegated execution.
         enabled:
           type: boolean
         next_run_at:
@@ -676,6 +841,7 @@ components:
         - action_type
         - cron_expression
         - action_parameters
+        - execution_profile_id
       properties:
         name:
           type: string
@@ -709,6 +875,10 @@ components:
             server_id: "123e4567-e89b-12d3-a456-426614174000"
         retention_policy:
           $ref: '#/components/schemas/RetentionPolicy'
+        execution_profile_id:
+          type: string
+          format: uuid
+          description: Execution profile UUID used for delegated execution.
         enabled:
           type: boolean
           default: true
@@ -742,6 +912,10 @@ components:
             server_id: "123e4567-e89b-12d3-a456-426614174000"
         retention_policy:
           $ref: '#/components/schemas/RetentionPolicy'
+        execution_profile_id:
+          type: string
+          format: uuid
+          description: Execution profile UUID used for delegated execution.
         enabled:
           type: boolean
 
@@ -758,6 +932,114 @@ components:
           items:
             $ref: '#/components/schemas/PaginationLink'
           description: Pagination links (first, last, next, prev, self).
+
+    ExecutionProfile:
+      type: object
+      required:
+        - id
+        - project_id
+        - name
+        - auth_type
+        - trust_id
+        - enabled
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        project_id:
+          type: string
+          readOnly: true
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          nullable: true
+          maxLength: 4096
+        auth_type:
+          type: string
+          enum: [trust]
+        trust_id:
+          type: string
+          format: uuid
+          description: Keystone trust UUID used for delegated execution.
+        enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    ExecutionProfileCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - auth_type
+        - trust_id
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          nullable: true
+          maxLength: 4096
+        auth_type:
+          type: string
+          enum: [trust]
+          default: trust
+        trust_id:
+          type: string
+          format: uuid
+          description: Keystone trust UUID used for delegated execution.
+        enabled:
+          type: boolean
+          default: true
+
+    ExecutionProfileUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          nullable: true
+          maxLength: 4096
+        auth_type:
+          type: string
+          enum: [trust]
+        trust_id:
+          type: string
+          format: uuid
+          description: Keystone trust UUID used for delegated execution.
+        enabled:
+          type: boolean
+
+    ExecutionProfileList:
+      type: object
+      required: [execution_profiles]
+      properties:
+        execution_profiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExecutionProfile'
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaginationLink'
 
     JobStatus:
       type: string

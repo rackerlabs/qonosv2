@@ -20,7 +20,6 @@ class AppConfig:
     keystone_service_user_domain_name: str = "Default"
     keystone_service_app_credential_id: Optional[str] = None
     keystone_service_app_credential_secret: Optional[str] = None
-    keystone_trusts_file: Optional[str] = None
 
     db_url: Optional[str] = None
 
@@ -117,13 +116,10 @@ def get_config() -> AppConfig:
         keystone_service_user_domain_name=(
             get_str("keystone", "service_user_domain_name", "Default") or "Default"
         ),
-        keystone_service_app_credential_id=get_str(
-            "keystone", "service_app_credential_id", None
-        ),
+        keystone_service_app_credential_id=get_str("keystone", "service_app_credential_id", None),
         keystone_service_app_credential_secret=get_str(
             "keystone", "service_app_credential_secret", None
         ),
-        keystone_trusts_file=get_str("keystone", "trusts_file", None),
         db_url=get_str("database", "url", None),
         policy_file=get_str("policy", "file", None),
         poll_interval_seconds=max(0.1, get_float("scheduler", "poll_interval_seconds", 1.0)),

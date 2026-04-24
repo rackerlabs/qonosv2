@@ -17,6 +17,23 @@ CREATE TABLE IF NOT EXISTS action_types (
   updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Execution profiles
+CREATE TABLE IF NOT EXISTS execution_profiles (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  project_id CHAR(36) NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  description TEXT NULL,
+  auth_type VARCHAR(32) NOT NULL DEFAULT 'trust',
+  trust_id CHAR(36) NULL,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  deleted_at DATETIME(6) NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX execution_profiles_project_id_idx ON execution_profiles(project_id);
+CREATE UNIQUE INDEX execution_profiles_project_name_uniq ON execution_profiles(project_id, name);
+
 -- Schedules
 CREATE TABLE IF NOT EXISTS schedules (
   id CHAR(36) NOT NULL PRIMARY KEY,
@@ -27,6 +44,7 @@ CREATE TABLE IF NOT EXISTS schedules (
   cron_expression VARCHAR(255) NOT NULL,
   action_parameters JSON NOT NULL,
   retention_policy JSON NULL,
+  execution_profile_id CHAR(36) NULL,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   next_run_at DATETIME(6) NULL,
   last_run_at DATETIME(6) NULL,
@@ -37,11 +55,14 @@ CREATE TABLE IF NOT EXISTS schedules (
   active_name VARCHAR(255) AS (IF(deleted_at IS NULL, name, NULL)) STORED,
 
   CONSTRAINT schedules_action_type_fk
-    FOREIGN KEY (action_type) REFERENCES action_types(action_type)
+    FOREIGN KEY (action_type) REFERENCES action_types(action_type),
+  CONSTRAINT schedules_execution_profile_fk
+    FOREIGN KEY (execution_profile_id) REFERENCES execution_profiles(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE UNIQUE INDEX schedules_project_active_name_uniq ON schedules(project_id, active_name);
 CREATE INDEX schedules_project_id_idx ON schedules(project_id);
+CREATE INDEX schedules_project_execution_profile_idx ON schedules(project_id, execution_profile_id);
 CREATE INDEX schedules_next_run_at_idx ON schedules(next_run_at);
 
 -- Jobs

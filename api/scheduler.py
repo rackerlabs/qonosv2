@@ -14,7 +14,12 @@ from api.app.db import get_session_factory
 from api.app.logging import configure_logging
 from api.app.utils.cron import compute_next_run_at
 from api.app.utils.time import utc_now
-from db.src.models import Job as JobModel, JobStatus as JobStatusModel, Schedule as ScheduleModel
+from db.src.models import (
+    ExecutionProfile as ExecutionProfileModel,
+    Job as JobModel,
+    JobStatus as JobStatusModel,
+    Schedule as ScheduleModel,
+)
 
 logger = logging.getLogger("qonos.scheduler")
 
@@ -77,13 +82,46 @@ async def _create_job_for_schedule_cas(
         )
         return
 
+    if not schedule.execution_profile_id:
+        logger.warning(
+            "schedule skipped decision=skip_missing_execution_profile schedule_id=%s project_id=%s",
+            schedule.id,
+            schedule.project_id,
+        )
+        return
+
+    trust_id: str | None = None
+    profile_result = await session.execute(
+        select(ExecutionProfileModel).where(
+            ExecutionProfileModel.id == schedule.execution_profile_id,
+            ExecutionProfileModel.project_id == schedule.project_id,
+            ExecutionProfileModel.deleted_at.is_(None),
+            ExecutionProfileModel.enabled.is_(True),
+            ExecutionProfileModel.auth_type == "trust",
+        )
+    )
+    profile = profile_result.scalar_one_or_none()
+    if profile is None or not profile.trust_id:
+        logger.warning(
+            "schedule skipped decision=skip_invalid_execution_profile schedule_id=%s project_id=%s execution_profile_id=%s",
+            schedule.id,
+            schedule.project_id,
+            schedule.execution_profile_id,
+        )
+        return
+    trust_id = str(profile.trust_id).strip() or None
+
     job_id = str(uuid4())
+    action_parameters = dict(schedule.action_parameters or {})
+    if trust_id:
+        action_parameters["qonos_trust_id"] = trust_id
+
     job_row = JobModel(
         id=job_id,
         schedule_id=schedule.id,
         project_id=schedule.project_id,
         action_type=schedule.action_type,
-        action_parameters=schedule.action_parameters,
+        action_parameters=action_parameters,
         run_at=now,
         status=JobStatusModel.QUEUED,
         version=1,

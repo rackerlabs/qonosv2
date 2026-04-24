@@ -54,8 +54,8 @@ def parse_retention_policy(raw: Any) -> Optional[RetentionPolicy]:
     return None
 
 
-def _build_connection(*, project_id: str):
-    return build_openstack_connection(project_id=project_id)
+def _build_connection(*, project_id: str, trust_id: str | None = None):
+    return build_openstack_connection(project_id=project_id, trust_id=trust_id)
 
 
 def _parse_created_at(value: Any) -> Optional[datetime]:
@@ -76,8 +76,9 @@ def _apply_server_snapshot_retention(
     action_type: str,
     policy: RetentionPolicy,
     now: datetime,
+    trust_id: str | None = None,
 ) -> dict[str, int]:
-    conn = _build_connection(project_id=project_id)
+    conn = _build_connection(project_id=project_id, trust_id=trust_id)
     images = list(conn.image.images(owner=project_id))
 
     candidates: list[tuple[str, datetime]] = []
@@ -142,6 +143,7 @@ async def run_retention_for_job(
     schedule_id: str,
     retention_policy_raw: Any,
     trigger_status: str,
+    trust_id: str | None = None,
 ) -> None:
     policy = parse_retention_policy(retention_policy_raw)
     if policy is None or policy.is_noop():
@@ -157,6 +159,7 @@ async def run_retention_for_job(
                 action_type=action_type,
                 policy=policy,
                 now=now,
+                trust_id=trust_id,
             )
         else:
             logger.info(

@@ -15,6 +15,7 @@ from .auth.keystone_client import HttpKeystoneClient, KeystoneClient
 from .auth.middleware import KeystoneAuthMiddleware
 from .config import get_config
 from .routes_actions import router as actions_router
+from .routes_execution_profiles import router as execution_profiles_router
 from .routes_health import router as health_router
 from .routes_jobs import router as jobs_router
 from .routes_schedules import router as schedules_router
@@ -48,6 +49,7 @@ def create_app(*, keystone_client: KeystoneClient | None = None) -> FastAPI:
     app.add_middleware(KeystoneAuthMiddleware, keystone_client=keystone_client)
 
     app.include_router(schedules_router)
+    app.include_router(execution_profiles_router)
     app.include_router(jobs_router)
     app.include_router(actions_router)
     app.include_router(health_router)

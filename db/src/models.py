@@ -44,6 +44,30 @@ class ActionType(Base):
     )
 
 
+class ExecutionProfile(Base):
+    __tablename__ = "execution_profiles"
+
+    id: Mapped[str] = mapped_column(sa.CHAR(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(sa.CHAR(36), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+    auth_type: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="trust")
+    trust_id: Mapped[Optional[str]] = mapped_column(sa.CHAR(36), nullable=True)
+    enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.func.current_timestamp(),
+        onupdate=sa.func.current_timestamp(),
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+
+
 class Schedule(Base):
     __tablename__ = "schedules"
 
@@ -57,6 +81,9 @@ class Schedule(Base):
     cron_expression: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     action_parameters: Mapped[dict[str, Any]] = mapped_column(sa.JSON, nullable=False)
     retention_policy: Mapped[Optional[dict[str, Any]]] = mapped_column(sa.JSON, nullable=True)
+    execution_profile_id: Mapped[Optional[str]] = mapped_column(
+        sa.CHAR(36), sa.ForeignKey("execution_profiles.id"), nullable=True, index=True
+    )
     enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
     next_run_at: Mapped[Optional[datetime]] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
@@ -86,6 +113,13 @@ sa.Index(
     postgresql_where=None,
 )
 sa.Index("schedules_next_run_at_idx", Schedule.next_run_at)
+sa.Index(
+    "execution_profiles_project_active_name_uniq",
+    ExecutionProfile.project_id,
+    ExecutionProfile.name,
+    unique=True,
+    postgresql_where=None,
+)
 
 
 class Job(Base):

@@ -16,7 +16,11 @@ from .db_errors import raise_for_db_error
 from .error_constants import ErrorMessages
 from .schemas import Job, JobCreate, JobList, JobStatus, JobUpdate
 from .routes_schedules import ensure_schedule_access_allowed, get_schedule_or_404
-from db.src.models import Job as JobModel, JobStatus as JobStatusModel
+from db.src.models import (
+    ExecutionProfile as ExecutionProfileModel,
+    Job as JobModel,
+    JobStatus as JobStatusModel,
+)
 
 router = APIRouter(prefix="/v2", tags=["jobs"])
 
@@ -68,15 +72,39 @@ async def create_job(
 ) -> Job:
     schedule = await get_schedule_or_404(payload.schedule_id, session)
     ensure_schedule_access_allowed(schedule, auth)
+    if not schedule.execution_profile_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Schedule is missing execution_profile_id required for delegated execution.",
+        )
 
     job_id = str(uuid4())
     now = _utcnow()
+    action_parameters = dict(schedule.action_parameters or {})
+    if schedule.execution_profile_id:
+        profile_result = await session.execute(
+            select(ExecutionProfileModel).where(
+                ExecutionProfileModel.id == schedule.execution_profile_id,
+                ExecutionProfileModel.project_id == schedule.project_id,
+                ExecutionProfileModel.deleted_at.is_(None),
+                ExecutionProfileModel.enabled.is_(True),
+                ExecutionProfileModel.auth_type == "trust",
+            )
+        )
+        profile = profile_result.scalar_one_or_none()
+        if profile is None or not profile.trust_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Schedule execution profile is invalid or missing trust configuration.",
+            )
+        action_parameters["qonos_trust_id"] = str(profile.trust_id).strip()
+
     job_row = JobModel(
         id=job_id,
         schedule_id=payload.schedule_id,
         project_id=schedule.project_id,
         action_type=schedule.action_type,
-        action_parameters=schedule.action_parameters,
+        action_parameters=action_parameters,
         status=JobStatusModel.QUEUED,
         run_at=now,
         started_at=None,
