@@ -24,6 +24,7 @@ from api.app.worker.handlers import ActionHandler, HandlerRegistry
 from api.app.worker.retention import run_retention_for_job
 from api.app.worker.registry import build_registry
 from db.src.models import (
+    ExecutionProfile as ExecutionProfileModel,
     Job as JobModel,
     JobFault as JobFaultModel,
     JobStatus as JobStatusModel,
@@ -265,8 +266,23 @@ class WorkerRuntime:
 
     async def _run_retention(self, *, job: JobModel, trigger_status: JobStatusModel) -> None:
         try:
+            trust_id: str | None = None
             async with self.session_factory() as session:
                 schedule = await self._load_schedule(session, job.schedule_id)
+                if schedule is not None and schedule.execution_profile_id:
+                    profile_result = await session.execute(
+                        select(ExecutionProfileModel).where(
+                            ExecutionProfileModel.id == schedule.execution_profile_id,
+                            ExecutionProfileModel.project_id == schedule.project_id,
+                            ExecutionProfileModel.deleted_at.is_(None),
+                            ExecutionProfileModel.enabled.is_(True),
+                            ExecutionProfileModel.auth_type == "trust",
+                        )
+                    )
+                    profile = profile_result.scalar_one_or_none()
+                    trust_id = (
+                        str(profile.trust_id).strip() if profile and profile.trust_id else None
+                    )
             if schedule is None:
                 return
             await run_retention_for_job(
@@ -275,6 +291,7 @@ class WorkerRuntime:
                 schedule_id=job.schedule_id,
                 retention_policy_raw=schedule.retention_policy,
                 trigger_status=trigger_status.value,
+                trust_id=trust_id,
             )
         except Exception as exc:
             logger.warning(

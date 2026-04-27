@@ -62,14 +62,16 @@ def _job(server_id: str) -> SimpleNamespace:
         schedule_id=str(uuid4()),
         project_id=str(uuid4()),
         action_type="server_snapshot",
-        action_parameters={"server_id": server_id},
+        action_parameters={"server_id": server_id, "qonos_trust_id": str(uuid4())},
     )
 
 
 def _cfg(**kwargs):
     defaults = dict(
         keystone_url="http://keystone:5000/v3",
-        keystone_admin_token="svc-token",
+        keystone_service_username="qonos",
+        keystone_service_password="qonos-pass",
+        keystone_service_user_domain_name="Default",
         keystone_verify_ssl=False,
         server_snapshot_poll_interval_seconds=0.01,
         server_snapshot_poll_timeout_seconds=0.2,
@@ -84,7 +86,10 @@ async def test_server_snapshot_success(monkeypatch: pytest.MonkeyPatch) -> None:
     compute = _FakeCompute(server_exists=True)
     conn = _FakeConn(compute, _FakeImageAPI(["QUEUED", "ACTIVE"]))
     monkeypatch.setattr("api.app.worker.server_snapshot_handler.get_config", lambda: _cfg())
-    monkeypatch.setattr(handler, "_build_connection", lambda project_id: conn)
+    monkeypatch.setattr(
+        "api.app.worker.server_snapshot_handler.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
     job = _job(str(uuid4()))
 
     result = await handler.execute(job)
@@ -102,7 +107,10 @@ async def test_server_snapshot_server_not_found(monkeypatch: pytest.MonkeyPatch)
     handler = ServerSnapshotActionHandler()
     conn = _FakeConn(_FakeCompute(server_exists=False), _FakeImageAPI(["QUEUED"]))
     monkeypatch.setattr("api.app.worker.server_snapshot_handler.get_config", lambda: _cfg())
-    monkeypatch.setattr(handler, "_build_connection", lambda project_id: conn)
+    monkeypatch.setattr(
+        "api.app.worker.server_snapshot_handler.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
 
     with pytest.raises(ValueError, match="Server not found"):
         await handler.execute(_job(str(uuid4())))
@@ -116,7 +124,10 @@ async def test_server_snapshot_creation_failure(monkeypatch: pytest.MonkeyPatch)
         _FakeImageAPI(["QUEUED"]),
     )
     monkeypatch.setattr("api.app.worker.server_snapshot_handler.get_config", lambda: _cfg())
-    monkeypatch.setattr(handler, "_build_connection", lambda project_id: conn)
+    monkeypatch.setattr(
+        "api.app.worker.server_snapshot_handler.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
 
     with pytest.raises(RuntimeError, match="Failed to create server snapshot"):
         await handler.execute(_job(str(uuid4())))
@@ -132,7 +143,10 @@ async def test_server_snapshot_polling_timeout(monkeypatch: pytest.MonkeyPatch) 
             server_snapshot_poll_interval_seconds=0.01, server_snapshot_poll_timeout_seconds=0.05
         ),
     )
-    monkeypatch.setattr(handler, "_build_connection", lambda project_id: conn)
+    monkeypatch.setattr(
+        "api.app.worker.server_snapshot_handler.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
 
     with pytest.raises(TimeoutError, match="Snapshot polling timed out"):
         await handler.execute(_job(str(uuid4())))
@@ -144,10 +158,13 @@ async def test_server_snapshot_auth_failure(monkeypatch: pytest.MonkeyPatch) -> 
     handler = ServerSnapshotActionHandler()
     monkeypatch.setattr("api.app.worker.server_snapshot_handler.get_config", lambda: _cfg())
 
-    def _raise_auth(project_id: str):
+    def _raise_auth(project_id: str, trust_id: str | None = None):
         raise RuntimeError("auth failed")
 
-    monkeypatch.setattr(handler, "_build_connection", _raise_auth)
+    monkeypatch.setattr(
+        "api.app.worker.server_snapshot_handler.build_openstack_connection",
+        _raise_auth,
+    )
 
     with pytest.raises(RuntimeError, match="auth failed"):
         await handler.execute(_job(str(uuid4())))
@@ -161,7 +178,10 @@ async def test_server_snapshot_failed_image_statuses(
     handler = ServerSnapshotActionHandler()
     conn = _FakeConn(_FakeCompute(server_exists=True), _FakeImageAPI([failed_status]))
     monkeypatch.setattr("api.app.worker.server_snapshot_handler.get_config", lambda: _cfg())
-    monkeypatch.setattr(handler, "_build_connection", lambda project_id: conn)
+    monkeypatch.setattr(
+        "api.app.worker.server_snapshot_handler.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
 
     with pytest.raises(RuntimeError, match=failed_status):
         await handler.execute(_job(str(uuid4())))
@@ -191,10 +211,32 @@ async def test_server_snapshot_reuses_existing_image_for_same_job(
     image_api._job_id = job.id
 
     monkeypatch.setattr("api.app.worker.server_snapshot_handler.get_config", lambda: _cfg())
-    monkeypatch.setattr(handler, "_build_connection", lambda project_id: conn)
+    monkeypatch.setattr(
+        "api.app.worker.server_snapshot_handler.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
 
     result = await handler.execute(job)
 
     assert result["image_id"] == "img-existing"
     assert result["status"] == "ACTIVE"
     assert compute.created_name is None
+
+
+@pytest.mark.anyio
+async def test_server_snapshot_requires_delegated_trust_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = ServerSnapshotActionHandler()
+    compute = _FakeCompute(server_exists=True)
+    conn = _FakeConn(compute, _FakeImageAPI(["QUEUED", "ACTIVE"]))
+    monkeypatch.setattr("api.app.worker.server_snapshot_handler.get_config", lambda: _cfg())
+    monkeypatch.setattr(
+        "api.app.worker.server_snapshot_handler.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
+    job = _job(str(uuid4()))
+    job.action_parameters.pop("qonos_trust_id", None)
+
+    with pytest.raises(RuntimeError, match="Missing delegated trust context"):
+        await handler.execute(job)

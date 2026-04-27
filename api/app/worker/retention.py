@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from api.app.config import get_config
+from api.app.openstack_connection import build_openstack_connection
 from api.app.utils.time import as_utc_aware, utc_now
 
 logger = logging.getLogger("qonos.worker.retention")
@@ -54,22 +54,8 @@ def parse_retention_policy(raw: Any) -> Optional[RetentionPolicy]:
     return None
 
 
-def _build_connection(*, project_id: str):
-    cfg = get_config()
-    if not cfg.keystone_url or not cfg.keystone_admin_token:
-        raise RuntimeError("Missing Keystone configuration: keystone_url and admin_token")
-    from openstack import connection as os_connection
-
-    return os_connection.Connection(
-        auth_type="v3token",
-        auth={
-            "auth_url": cfg.keystone_url,
-            "token": cfg.keystone_admin_token,
-            "project_id": project_id,
-        },
-        verify=cfg.keystone_verify_ssl,
-        compute_api_version="2",
-    )
+def _build_connection(*, project_id: str, trust_id: str | None = None):
+    return build_openstack_connection(project_id=project_id, trust_id=trust_id)
 
 
 def _parse_created_at(value: Any) -> Optional[datetime]:
@@ -90,8 +76,9 @@ def _apply_server_snapshot_retention(
     action_type: str,
     policy: RetentionPolicy,
     now: datetime,
+    trust_id: str | None = None,
 ) -> dict[str, int]:
-    conn = _build_connection(project_id=project_id)
+    conn = _build_connection(project_id=project_id, trust_id=trust_id)
     images = list(conn.image.images(owner=project_id))
 
     candidates: list[tuple[str, datetime]] = []
@@ -156,6 +143,7 @@ async def run_retention_for_job(
     schedule_id: str,
     retention_policy_raw: Any,
     trigger_status: str,
+    trust_id: str | None = None,
 ) -> None:
     policy = parse_retention_policy(retention_policy_raw)
     if policy is None or policy.is_noop():
@@ -171,6 +159,7 @@ async def run_retention_for_job(
                 action_type=action_type,
                 policy=policy,
                 now=now,
+                trust_id=trust_id,
             )
         else:
             logger.info(

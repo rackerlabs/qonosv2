@@ -56,7 +56,9 @@ async def test_retention_count_based(monkeypatch: pytest.MonkeyPatch) -> None:
         _img(image_id="i3", created_at=now - timedelta(days=8)),
     ]
     image_api = _FakeImageAPI(imgs)
-    monkeypatch.setattr(retention, "_build_connection", lambda project_id: _FakeConn(image_api))
+    monkeypatch.setattr(
+        retention, "_build_connection", lambda project_id, trust_id=None: _FakeConn(image_api)
+    )
 
     await retention.run_retention_for_job(
         action_type="server_snapshot",
@@ -77,7 +79,9 @@ async def test_retention_age_based(monkeypatch: pytest.MonkeyPatch) -> None:
         _img(image_id="new", created_at=now - timedelta(days=2)),
     ]
     image_api = _FakeImageAPI(imgs)
-    monkeypatch.setattr(retention, "_build_connection", lambda project_id: _FakeConn(image_api))
+    monkeypatch.setattr(
+        retention, "_build_connection", lambda project_id, trust_id=None: _FakeConn(image_api)
+    )
 
     await retention.run_retention_for_job(
         action_type="server_snapshot",
@@ -94,7 +98,9 @@ async def test_retention_age_based(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_retention_zero_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     now = utc_now()
     image_api = _FakeImageAPI([_img(image_id="i1", created_at=now - timedelta(days=10))])
-    monkeypatch.setattr(retention, "_build_connection", lambda project_id: _FakeConn(image_api))
+    monkeypatch.setattr(
+        retention, "_build_connection", lambda project_id, trust_id=None: _FakeConn(image_api)
+    )
 
     await retention.run_retention_for_job(
         action_type="server_snapshot",
@@ -123,7 +129,9 @@ async def test_retention_mixed_artifact_states(monkeypatch: pytest.MonkeyPatch) 
         _img(image_id="drop", created_at=now - timedelta(days=15)),
     ]
     image_api = _FakeImageAPI(imgs)
-    monkeypatch.setattr(retention, "_build_connection", lambda project_id: _FakeConn(image_api))
+    monkeypatch.setattr(
+        retention, "_build_connection", lambda project_id, trust_id=None: _FakeConn(image_api)
+    )
 
     await retention.run_retention_for_job(
         action_type="server_snapshot",

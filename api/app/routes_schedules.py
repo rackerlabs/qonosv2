@@ -9,17 +9,109 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .auth.keystone_client import HttpKeystoneClient
 from .auth.context import AuthContext
 from .auth.rbac import require_policy
+from .config import get_config
 from .utils.cron import compute_next_run_at
 from .utils.time import utc_now
 from .db_errors import raise_for_db_error
 from .db import get_db_session
 from .error_constants import ErrorMessages
 from .schemas import Schedule, ScheduleCreate, ScheduleList, ScheduleUpdate
-from db.src.models import ActionType as ActionTypeModel, Schedule as ScheduleModel
+from db.src.models import (
+    ActionType as ActionTypeModel,
+    ExecutionProfile as ExecutionProfileModel,
+    Schedule as ScheduleModel,
+)
 
 router = APIRouter(prefix="/v2", tags=["schedules"])
+
+
+async def _validate_trust_for_project(*, project_id: str, trust_id: Optional[str]) -> None:
+    normalized = (trust_id or "").strip()
+    if not normalized:
+        return
+    cfg = get_config()
+    if not cfg.keystone_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Keystone URL must be configured when trust_id is provided.",
+        )
+    if not cfg.keystone_service_username or not cfg.keystone_service_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "trust_id requires service_username/service_password credentials "
+                "for delegated execution."
+            ),
+        )
+    client = HttpKeystoneClient(
+        base_url=cfg.keystone_url,
+        auth_mode="password",
+        service_app_credential_id=cfg.keystone_service_app_credential_id,
+        service_app_credential_secret=cfg.keystone_service_app_credential_secret,
+        service_username=cfg.keystone_service_username,
+        service_password=cfg.keystone_service_password,
+        service_user_domain_name=cfg.keystone_service_user_domain_name,
+        verify_ssl=cfg.keystone_verify_ssl,
+    )
+    try:
+        await client.validate_trust(normalized, expected_project_id=project_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid trust_id: {str(exc)}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to validate trust_id with Keystone: {str(exc)}",
+        ) from exc
+
+
+async def _resolve_delegated_trust_id(
+    *,
+    session: AsyncSession,
+    project_id: str,
+    execution_profile_id: Optional[str],
+) -> str:
+    if not execution_profile_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="execution_profile_id is required.",
+        )
+    result = await session.execute(
+        select(ExecutionProfileModel).where(
+            ExecutionProfileModel.id == execution_profile_id,
+            ExecutionProfileModel.project_id == project_id,
+            ExecutionProfileModel.deleted_at.is_(None),
+        )
+    )
+    profile = result.scalar_one_or_none()
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid execution_profile_id: profile not found for project.",
+        )
+    if not profile.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid execution_profile_id: profile is disabled.",
+        )
+    if profile.auth_type != "trust":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid execution_profile_id: unsupported auth_type.",
+        )
+    resolved_trust_id = (profile.trust_id or "").strip()
+    if not resolved_trust_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid execution_profile_id: trust_id missing in profile.",
+        )
+    await _validate_trust_for_project(project_id=project_id, trust_id=resolved_trust_id)
+    return execution_profile_id
 
 
 def _compute_next_run_at(cron_expression: str, *, now: Optional[datetime] = None) -> datetime:
@@ -157,6 +249,11 @@ async def create_schedule(
 
     # Validate action_parameters against the registered schema for this action_type.
     _validate_action_parameters(payload.action_parameters, action.action_parameters_schema)
+    resolved_execution_profile_id = await _resolve_delegated_trust_id(
+        session=session,
+        project_id=auth.project_id,
+        execution_profile_id=payload.execution_profile_id,
+    )
 
     schedule_id = str(uuid4())
     now = utc_now()
@@ -170,6 +267,7 @@ async def create_schedule(
         cron_expression=payload.cron_expression,
         action_parameters=payload.action_parameters,
         retention_policy=_normalize_retention_policy_for_storage(payload),
+        execution_profile_id=resolved_execution_profile_id,
         enabled=payload.enabled,
         next_run_at=next_run_at,
         last_run_at=None,
@@ -258,6 +356,18 @@ async def update_schedule(
             )
 
         update_data = payload.model_dump(exclude_unset=True)
+        if (
+            "execution_profile_id" not in update_data
+            and not schedule.execution_profile_id
+            and schedule.action_type == "server_snapshot"
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "execution_profile_id is required for server_snapshot schedules. "
+                    "Provide a valid execution profile."
+                ),
+            )
         if "action_parameters" in update_data and update_data["action_parameters"] is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -265,6 +375,13 @@ async def update_schedule(
             )
         if "retention_policy" in update_data:
             update_data["retention_policy"] = _normalize_retention_policy_for_storage(payload)
+        if "execution_profile_id" in update_data:
+            resolved_execution_profile_id = await _resolve_delegated_trust_id(
+                session=session,
+                project_id=schedule.project_id,
+                execution_profile_id=payload.execution_profile_id,
+            )
+            update_data["execution_profile_id"] = resolved_execution_profile_id
 
         # If cron_expression is updated, recompute next_run_at.
         if "cron_expression" in update_data and update_data["cron_expression"] is not None:
