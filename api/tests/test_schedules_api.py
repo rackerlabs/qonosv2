@@ -4,7 +4,9 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
+from api.app import routes_schedules
 from api.tests.test_auth_rbac import (
     PROJECT1_MEMBER,
     PROJECT2_MEMBER,
@@ -77,6 +79,77 @@ async def test_create_schedule_invalid_action_parameter_type_returns_400(
     )
     assert resp.status_code == 400
     assert "action_parameters.server_id must be a string" in resp.text
+
+
+@pytest.mark.anyio
+async def test_create_schedule_with_execution_profile_is_resolved(
+    async_client: httpx.AsyncClient,
+) -> None:
+    called = {"project_id": None, "execution_profile_id": None}
+
+    async def _fake_resolve(*, session, project_id: str, execution_profile_id: str | None) -> str:
+        called["project_id"] = project_id
+        called["execution_profile_id"] = execution_profile_id
+        return execution_profile_id or ""
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(routes_schedules, "_resolve_delegated_trust_id", _fake_resolve)
+    try:
+        profile_id = str(uuid4())
+        body = {
+            "name": f"profile-validated-{uuid4()}",
+            "description": "execution profile happy path",
+            "action_type": "server_snapshot",
+            "cron_expression": "0 2 * * *",
+            "action_parameters": {"server_id": "srv-trust"},
+            "execution_profile_id": profile_id,
+            "enabled": True,
+        }
+        resp = await async_client.post(
+            "/v2/schedules",
+            headers=_auth({"X-Auth-Token": PROJECT1_MEMBER}),
+            json=body,
+        )
+        assert resp.status_code == 201, resp.text
+        created = resp.json()
+        assert created["execution_profile_id"] == profile_id
+        assert called["execution_profile_id"] == profile_id
+        assert called["project_id"] == created["project_id"]
+    finally:
+        monkeypatch.undo()
+
+
+@pytest.mark.anyio
+async def test_create_schedule_invalid_execution_profile_returns_400(
+    async_client: httpx.AsyncClient,
+) -> None:
+    async def _fake_resolve(*, session, project_id: str, execution_profile_id: str | None) -> str:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid execution_profile_id: profile not found for project.",
+        )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(routes_schedules, "_resolve_delegated_trust_id", _fake_resolve)
+    try:
+        body = {
+            "name": f"profile-invalid-{uuid4()}",
+            "description": "execution profile reject path",
+            "action_type": "server_snapshot",
+            "cron_expression": "0 2 * * *",
+            "action_parameters": {"server_id": "srv-trust"},
+            "execution_profile_id": str(uuid4()),
+            "enabled": True,
+        }
+        resp = await async_client.post(
+            "/v2/schedules",
+            headers=_auth({"X-Auth-Token": PROJECT1_MEMBER}),
+            json=body,
+        )
+        assert resp.status_code == 400
+        assert "Invalid execution_profile_id" in resp.text
+    finally:
+        monkeypatch.undo()
 
 
 @pytest.mark.anyio

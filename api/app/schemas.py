@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -34,7 +35,23 @@ class ScheduleBase(BaseModel):
     cron_expression: str = Field(..., max_length=255)
     action_parameters: Dict[str, Any]
     retention_policy: Optional[RetentionPolicy] = None
+    execution_profile_id: Optional[str] = Field(
+        ...,
+        description="Execution profile UUID used for delegated execution.",
+    )
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_execution_profile_id(self) -> "ScheduleBase":
+        profile_id = (self.execution_profile_id or "").strip()
+        if not profile_id:
+            raise ValueError("execution_profile_id is required")
+        try:
+            UUID(profile_id)
+        except Exception as exc:
+            raise ValueError("execution_profile_id must be a valid UUID") from exc
+        self.execution_profile_id = profile_id
+        return self
 
 
 class ScheduleCreate(ScheduleBase):
@@ -51,7 +68,25 @@ class ScheduleUpdate(BaseModel):
     cron_expression: Optional[str] = Field(default=None, max_length=255)
     action_parameters: Optional[Dict[str, Any]] = None
     retention_policy: Optional[RetentionPolicy] = None
+    execution_profile_id: Optional[str] = Field(
+        default=None,
+        description="Execution profile UUID used for delegated execution.",
+    )
     enabled: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def validate_execution_profile_id(self) -> "ScheduleUpdate":
+        if self.execution_profile_id is not None:
+            profile_id = self.execution_profile_id.strip()
+            if not profile_id:
+                self.execution_profile_id = None
+            else:
+                try:
+                    UUID(profile_id)
+                except Exception as exc:
+                    raise ValueError("execution_profile_id must be a valid UUID") from exc
+                self.execution_profile_id = profile_id
+        return self
 
 
 class Schedule(ScheduleBase):
@@ -67,6 +102,85 @@ class Schedule(ScheduleBase):
 
 class ScheduleList(BaseModel):
     schedules: List[Schedule]
+    links: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ExecutionProfileBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=4096)
+    auth_type: str = Field(default="trust", max_length=32)
+    trust_id: Optional[str] = Field(
+        default=None,
+        description="Keystone trust UUID used for delegated execution.",
+    )
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_trust_shape(self) -> "ExecutionProfileBase":
+        auth_type = (self.auth_type or "").strip().lower()
+        if not auth_type:
+            raise ValueError("auth_type is required")
+        if auth_type != "trust":
+            raise ValueError("auth_type must be 'trust'")
+        self.auth_type = auth_type
+        trust_id = (self.trust_id or "").strip()
+        if not trust_id:
+            raise ValueError("trust_id is required when auth_type='trust'")
+        try:
+            UUID(trust_id)
+        except Exception as exc:
+            raise ValueError("trust_id must be a valid UUID") from exc
+        self.trust_id = trust_id
+        return self
+
+
+class ExecutionProfileCreate(ExecutionProfileBase):
+    pass
+
+
+class ExecutionProfileUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=4096)
+    auth_type: Optional[str] = Field(default=None, max_length=32)
+    trust_id: Optional[str] = Field(
+        default=None,
+        description="Keystone trust UUID used for delegated execution.",
+    )
+    enabled: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def validate_optional_fields(self) -> "ExecutionProfileUpdate":
+        if self.auth_type is not None:
+            auth_type = self.auth_type.strip().lower()
+            if not auth_type:
+                raise ValueError("auth_type cannot be empty")
+            if auth_type != "trust":
+                raise ValueError("auth_type must be 'trust'")
+            self.auth_type = auth_type
+        if self.trust_id is not None:
+            trust_id = self.trust_id.strip()
+            if not trust_id:
+                self.trust_id = None
+            else:
+                try:
+                    UUID(trust_id)
+                except Exception as exc:
+                    raise ValueError("trust_id must be a valid UUID") from exc
+                self.trust_id = trust_id
+        return self
+
+
+class ExecutionProfile(ExecutionProfileBase):
+    id: str
+    project_id: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ExecutionProfileList(BaseModel):
+    execution_profiles: List[ExecutionProfile]
     links: List[Dict[str, Any]] = Field(default_factory=list)
 
 
