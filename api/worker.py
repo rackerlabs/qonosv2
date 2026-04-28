@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from fastapi import FastAPI
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from uvicorn import Config as UvicornConfig, Server as UvicornServer
 
@@ -76,6 +76,7 @@ class WorkerRuntime:
     def __init__(self, cfg: AppConfig, registry: HandlerRegistry) -> None:
         self.cfg = cfg
         self.registry = registry
+        self.worker_id = cfg.redis_consumer_name
         self.session_factory = get_session_factory()
         self.metrics = WorkerMetrics()
         self._stop = asyncio.Event()
@@ -83,6 +84,7 @@ class WorkerRuntime:
         self._tasks: set[asyncio.Task[Any]] = set()
         self._wake = asyncio.Event()
         self._last_stale_sweep_at: Optional[datetime] = None
+        self._last_job_cleanup_at: Optional[datetime] = None
 
     async def run(self) -> None:
         logger.info(
@@ -104,6 +106,16 @@ class WorkerRuntime:
                     await self._reclaim_stale_processing_once()
                     self._last_stale_sweep_at = now
                     self._wake.set()
+                cleanup_interval = self.cfg.job_cleanup_interval_seconds
+                if (
+                    self.cfg.job_cleanup_enabled
+                    and (
+                        self._last_job_cleanup_at is None
+                        or (now - self._last_job_cleanup_at).total_seconds() >= cleanup_interval
+                    )
+                ):
+                    await self._cleanup_expired_jobs_once()
+                    self._last_job_cleanup_at = now
                 try:
                     await asyncio.wait_for(
                         self._wake.wait(), timeout=self.cfg.worker_idle_sleep_seconds
@@ -185,6 +197,7 @@ class WorkerRuntime:
                     )
                     .values(
                         status=JobStatusModel.PROCESSING,
+                        worker_id=self.worker_id,
                         started_at=now,
                         updated_at=now,
                         version=JobModel.version + 1,
@@ -242,6 +255,7 @@ class WorkerRuntime:
                 )
                 .values(
                     status=JobStatusModel.PROCESSING,
+                    worker_id=self.worker_id,
                     started_at=now,
                     updated_at=now,
                     version=JobModel.version + 1,
@@ -350,9 +364,12 @@ class WorkerRuntime:
                 fault = JobFaultModel(
                     job_id=job.id,
                     project_id=job.project_id,
+                    worker_id=job.worker_id,
                     code=code,
                     title=title[:255],
                     detail=detail,
+                    error_message=detail,
+                    action_parameters_at_failure=job.action_parameters,
                     extra=extra,
                     occurred_at=utc_now(),
                     created_at=utc_now(),
@@ -415,6 +432,57 @@ class WorkerRuntime:
             await self._mark_hard_timed_out(
                 job_id=job_id, expected_version=expected_version, cutoff=cutoff
             )
+
+    async def _cleanup_expired_jobs_once(self) -> int:
+        now = utc_now()
+        ttl_cutoff = now - timedelta(days=self.cfg.job_cleanup_ttl_days)
+        batch_size = 100
+        terminal_failures = {
+            JobStatusModel.ERROR,
+            JobStatusModel.TIMED_OUT,
+            JobStatusModel.HARD_TIMED_OUT,
+            JobStatusModel.MAX_RETRIED,
+        }
+
+        async with self.session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(JobModel.id)
+                    .where(
+                        or_(
+                            and_(
+                                JobModel.status == JobStatusModel.DONE,
+                                JobModel.completed_at.is_not(None),
+                                JobModel.completed_at < ttl_cutoff,
+                            ),
+                            and_(
+                                JobModel.status == JobStatusModel.CANCELLED,
+                                JobModel.cancelled_at.is_not(None),
+                                JobModel.cancelled_at < ttl_cutoff,
+                            ),
+                            and_(
+                                JobModel.status.in_(terminal_failures),
+                                JobModel.ended_at.is_not(None),
+                                JobModel.ended_at < ttl_cutoff,
+                            ),
+                        )
+                    )
+                    .order_by(JobModel.updated_at.asc(), JobModel.id.asc())
+                    .limit(batch_size)
+                )
+                job_ids = [row[0] for row in result.all()]
+                if not job_ids:
+                    return 0
+
+                await session.execute(delete(JobFaultModel).where(JobFaultModel.job_id.in_(job_ids)))
+                await session.execute(delete(JobModel).where(JobModel.id.in_(job_ids)))
+
+        logger.info(
+            "job cleanup decision=expired_terminal_jobs_deleted count=%s ttl_days=%s",
+            len(job_ids),
+            self.cfg.job_cleanup_ttl_days,
+        )
+        return len(job_ids)
 
     async def _mark_hard_timed_out(
         self, *, job_id: str, expected_version: int, cutoff: datetime
@@ -531,6 +599,7 @@ class WorkerRuntime:
                     version=JobModel.version + 1,
                     updated_at=now,
                     run_at=now,
+                    worker_id=None,
                     started_at=None,
                     ended_at=None,
                     retry_count=job.retry_count + 1,

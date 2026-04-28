@@ -203,14 +203,40 @@ class Job(BaseModel):
     action_parameters: Dict[str, Any]
     status: JobStatus
     run_at: datetime
+    worker_id: Optional[str] = None
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     retry_count: int = 0
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    completed_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class JobFault(BaseModel):
+    id: int
+    job_id: str
+    project_id: str
+    occurred_at: datetime
+    worker_id: Optional[str] = None
+    code: str
+    title: str
+    detail: str
+    error_message: Optional[str] = None
+    action_parameters_at_failure: Optional[Dict[str, Any]] = None
+    extra: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class JobDetail(Job):
+    version: int
+    cancelled_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    fault_history: List[JobFault] = Field(default_factory=list)
 
 
 class JobCreate(BaseModel):
@@ -219,6 +245,7 @@ class JobCreate(BaseModel):
 
 class JobUpdate(BaseModel):
     status: Optional[JobStatus] = None
+    worker_id: Optional[str] = Field(default=None, max_length=255)
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     retry_count: Optional[int] = Field(default=None, ge=0)

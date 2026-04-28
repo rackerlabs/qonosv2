@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     'MAX_RETRIED'
   ) NOT NULL DEFAULT 'QUEUED',
   version INT NOT NULL DEFAULT 1,
+  worker_id VARCHAR(255) NULL,
   started_at DATETIME(6) NULL,
   ended_at DATETIME(6) NULL,
   retry_count INT NOT NULL DEFAULT 0,
@@ -107,9 +108,12 @@ CREATE TABLE IF NOT EXISTS job_faults (
   job_id CHAR(36) NOT NULL,
   project_id CHAR(36) NOT NULL,
   occurred_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  worker_id VARCHAR(255) NULL,
   code VARCHAR(100) NOT NULL,
   title VARCHAR(255) NOT NULL,
   detail TEXT NOT NULL,
+  error_message TEXT NULL,
+  action_parameters_at_failure JSON NULL,
   extra JSON NULL,
   created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 
@@ -119,4 +123,3 @@ CREATE TABLE IF NOT EXISTS job_faults (
 
 CREATE INDEX job_faults_job_id_idx ON job_faults(job_id, occurred_at);
 CREATE INDEX job_faults_project_id_idx ON job_faults(project_id, occurred_at);
-

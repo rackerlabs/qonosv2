@@ -46,6 +46,9 @@ class AppConfig:
 
     worker_stale_processing_sweep_interval_seconds: float = 120.0
     worker_stale_processing_after_seconds: Optional[float] = None
+    job_cleanup_enabled: bool = True
+    job_cleanup_ttl_days: int = 14
+    job_cleanup_interval_seconds: float = 3600.0
     server_snapshot_poll_interval_seconds: float = 5.0
     server_snapshot_poll_timeout_seconds: float = 600.0
 
@@ -142,6 +145,11 @@ def get_config() -> AppConfig:
             None
             if not parser.has_option("worker", "stale_processing_after_seconds")
             else max(0.1, get_float("worker", "stale_processing_after_seconds", 0.0))
+        ),
+        job_cleanup_enabled=get_bool("worker", "job_cleanup_enabled", True),
+        job_cleanup_ttl_days=max(1, get_int("worker", "job_cleanup_ttl_days", 14)),
+        job_cleanup_interval_seconds=max(
+            60.0, get_float("worker", "job_cleanup_interval_seconds", 3600.0)
         ),
         server_snapshot_poll_interval_seconds=max(
             0.1, get_float("worker", "server_snapshot_poll_interval_seconds", 5.0)
