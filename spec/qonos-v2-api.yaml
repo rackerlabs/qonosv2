@@ -388,6 +388,24 @@ paths:
           description: Filter jobs by status
           schema:
             $ref: '#/components/schemas/JobStatus'
+        - name: action_type
+          in: query
+          description: Filter jobs by action type
+          schema:
+            type: string
+            maxLength: 100
+        - name: created_after
+          in: query
+          description: Filter jobs created after this timestamp
+          schema:
+            type: string
+            format: date-time
+        - name: created_before
+          in: query
+          description: Filter jobs created before this timestamp
+          schema:
+            type: string
+            format: date-time
       responses:
         '200':
           description: Success
@@ -428,7 +446,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Job'
+                $ref: '#/components/schemas/JobDetail'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -456,6 +474,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Job'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /jobs/{job_id}/cancel:
+    post:
+      tags: [jobs]
+      summary: Cancel job
+      description: Cancel a job (valid for QUEUED or PROCESSING).
+      operationId: cancelJobViaPost
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '204':
+          description: No Content
+          headers:
+            X-Openstack-Request-Id:
+              $ref: '#/components/headers/XOpenstackRequestId'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1129,6 +1171,9 @@ components:
           type: string
           format: date-time
           description: Calculated from the schedule's cron expression. When the job should run.
+        worker_id:
+          type: string
+          nullable: true
         started_at:
           type: string
           format: date-time
@@ -1144,6 +1189,79 @@ components:
           type: string
           nullable: true
           maxLength: 4096
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    JobFault:
+      type: object
+      required:
+        - id
+        - job_id
+        - project_id
+        - occurred_at
+        - code
+        - title
+        - detail
+        - created_at
+      properties:
+        id:
+          type: integer
+        job_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        worker_id:
+          type: string
+          nullable: true
+        code:
+          type: string
+        title:
+          type: string
+        detail:
+          type: string
+        error_message:
+          type: string
+          nullable: true
+        action_parameters_at_failure:
+          type: object
+          nullable: true
+          additionalProperties: true
+        extra:
+          type: object
+          nullable: true
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    JobDetail:
+      allOf:
+        - $ref: '#/components/schemas/Job'
+        - type: object
+          required:
+            - version
+            - fault_history
+          properties:
+            version:
+              type: integer
+            cancelled_at:
+              type: string
+              format: date-time
+              nullable: true
+            completed_at:
+              type: string
+              format: date-time
+              nullable: true
+            fault_history:
+              type: array
+              items:
+                $ref: '#/components/schemas/JobFault'
 
     JobCreate:
       type: object

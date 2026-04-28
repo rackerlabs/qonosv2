@@ -137,6 +137,7 @@ class Job(Base):
         sa.Enum(JobStatus, name="job_status"), nullable=False, default=JobStatus.QUEUED
     )
     version: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1)
+    worker_id: Mapped[Optional[str]] = mapped_column(sa.String(255), nullable=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
     )
@@ -176,9 +177,14 @@ class JobFault(Base):
     occurred_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.current_timestamp()
     )
+    worker_id: Mapped[Optional[str]] = mapped_column(sa.String(255), nullable=True)
     code: Mapped[str] = mapped_column(sa.String(100), nullable=False)
     title: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     detail: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+    action_parameters_at_failure: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        sa.JSON, nullable=True
+    )
     extra: Mapped[Optional[dict[str, Any]]] = mapped_column(sa.JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.current_timestamp()

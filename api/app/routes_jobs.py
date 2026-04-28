@@ -14,11 +14,12 @@ from .auth.rbac import require_policy
 from .db import get_db_session
 from .db_errors import raise_for_db_error
 from .error_constants import ErrorMessages
-from .schemas import Job, JobCreate, JobList, JobStatus, JobUpdate
+from .schemas import Job, JobCreate, JobDetail, JobFault, JobList, JobStatus, JobUpdate
 from .routes_schedules import ensure_schedule_access_allowed, get_schedule_or_404
 from db.src.models import (
     ExecutionProfile as ExecutionProfileModel,
     Job as JobModel,
+    JobFault as JobFaultModel,
     JobStatus as JobStatusModel,
 )
 
@@ -38,6 +39,9 @@ async def list_jobs(
     limit: int = Query(default=100, ge=1, le=1000),
     schedule_id: Optional[str] = Query(default=None),
     status_filter: Optional[JobStatus] = Query(default=None, alias="status"),
+    action_type: Optional[str] = Query(default=None),
+    created_after: Optional[datetime] = Query(default=None),
+    created_before: Optional[datetime] = Query(default=None),
     auth: AuthContext = Depends(require_policy("job:read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> JobList:
@@ -51,8 +55,16 @@ async def list_jobs(
 
     if status_filter is not None:
         stmt = stmt.where(JobModel.status == JobStatusModel(status_filter.value))
+    if action_type is not None:
+        stmt = stmt.where(JobModel.action_type == action_type)
+    if created_after is not None:
+        stmt = stmt.where(JobModel.created_at > created_after)
+    if created_before is not None:
+        stmt = stmt.where(JobModel.created_at < created_before)
+    if marker is not None:
+        stmt = stmt.where(JobModel.id > marker)
 
-    stmt = stmt.limit(limit)
+    stmt = stmt.order_by(JobModel.id).limit(limit)
     result = await session.execute(stmt)
     rows = result.scalars().all()
 
@@ -107,6 +119,7 @@ async def create_job(
         action_parameters=action_parameters,
         status=JobStatusModel.QUEUED,
         run_at=now,
+        worker_id=None,
         started_at=None,
         ended_at=None,
         retry_count=0,
@@ -151,16 +164,28 @@ def ensure_job_access_allowed(job: JobModel, auth: AuthContext) -> None:
 
 @router.get(
     "/jobs/{job_id}",
-    response_model=Job,
+    response_model=JobDetail,
 )
 async def show_job(
     job_id: str = Path(..., description="Job ID"),
     auth: AuthContext = Depends(require_policy("job:read")),
     session: AsyncSession = Depends(get_db_session),
-) -> Job:
+) -> JobDetail:
     job = await get_job_or_404(job_id, session)
     ensure_job_access_allowed(job, auth)
-    return Job.model_validate(job)
+    result = await session.execute(
+        select(JobFaultModel)
+        .where(JobFaultModel.job_id == job.id)
+        .order_by(JobFaultModel.occurred_at.asc(), JobFaultModel.id.asc())
+    )
+    faults = [JobFault.model_validate(row) for row in result.scalars().all()]
+    job_data = Job.model_validate(job).model_dump()
+    return JobDetail(
+        **job_data,
+        version=job.version,
+        cancelled_at=job.cancelled_at,
+        fault_history=faults,
+    )
 
 
 @router.patch(
@@ -205,11 +230,7 @@ async def update_job(
     return Job.model_validate(job)
 
 
-@router.delete(
-    "/jobs/{job_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-async def cancel_job(
+async def _cancel_job(
     job_id: str = Path(..., description="Job ID"),
     auth: AuthContext = Depends(require_policy("job:cancel")),
     session: AsyncSession = Depends(get_db_session),
@@ -234,3 +255,27 @@ async def cancel_job(
     except (IntegrityError, OperationalError) as e:
         await session.rollback()
         raise_for_db_error(e)
+
+
+@router.post(
+    "/jobs/{job_id}/cancel",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def cancel_job_via_post(
+    job_id: str = Path(..., description="Job ID"),
+    auth: AuthContext = Depends(require_policy("job:cancel")),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+    await _cancel_job(job_id=job_id, auth=auth, session=session)
+
+
+@router.delete(
+    "/jobs/{job_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def cancel_job(
+    job_id: str = Path(..., description="Job ID"),
+    auth: AuthContext = Depends(require_policy("job:cancel")),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+    await _cancel_job(job_id=job_id, auth=auth, session=session)
