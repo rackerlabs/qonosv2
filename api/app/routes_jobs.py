@@ -15,12 +15,14 @@ from .db import get_db_session
 from .db_errors import raise_for_db_error
 from .error_constants import ErrorMessages
 from .schemas import Job, JobCreate, JobDetail, JobFault, JobList, JobStatus, JobUpdate
+from .notifications import get_job_event_notifier
 from .routes_schedules import ensure_schedule_access_allowed, get_schedule_or_404
 from db.src.models import (
     ExecutionProfile as ExecutionProfileModel,
     Job as JobModel,
     JobFault as JobFaultModel,
     JobStatus as JobStatusModel,
+    Schedule as ScheduleModel,
 )
 
 router = APIRouter(prefix="/v2", tags=["jobs"])
@@ -136,6 +138,12 @@ async def create_job(
         await session.rollback()
         raise_for_db_error(e)
     await session.refresh(job_row)
+    get_job_event_notifier().emit_non_blocking(
+        event_type="job.created",
+        job=job_row,
+        schedule_webhook_url=schedule.webhook_url,
+        error_message=job_row.error_message,
+    )
 
     return Job.model_validate(job_row)
 
@@ -231,10 +239,10 @@ async def update_job(
 
 
 async def _cancel_job(
-    job_id: str = Path(..., description="Job ID"),
+    job_id: str,
     auth: AuthContext = Depends(require_policy("job:cancel")),
     session: AsyncSession = Depends(get_db_session),
-) -> None:
+) -> JobModel:
     job = await get_job_or_404(job_id, session)
     ensure_job_access_allowed(job, auth)
 
@@ -255,6 +263,8 @@ async def _cancel_job(
     except (IntegrityError, OperationalError) as e:
         await session.rollback()
         raise_for_db_error(e)
+    await session.refresh(job)
+    return job
 
 
 @router.post(
@@ -266,16 +276,15 @@ async def cancel_job_via_post(
     auth: AuthContext = Depends(require_policy("job:cancel")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    await _cancel_job(job_id=job_id, auth=auth, session=session)
-
-
-@router.delete(
-    "/jobs/{job_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-async def cancel_job(
-    job_id: str = Path(..., description="Job ID"),
-    auth: AuthContext = Depends(require_policy("job:cancel")),
-    session: AsyncSession = Depends(get_db_session),
-) -> None:
-    await _cancel_job(job_id=job_id, auth=auth, session=session)
+    job = await _cancel_job(job_id=job_id, auth=auth, session=session)
+    schedule_result = await session.execute(
+        select(ScheduleModel).where(ScheduleModel.id == job.schedule_id)
+    )
+    schedule = schedule_result.scalar_one_or_none()
+    get_job_event_notifier().emit_non_blocking(
+        event_type="job.cancelled",
+        job=job,
+        schedule_webhook_url=(schedule.webhook_url if schedule else None),
+        error_message=job.error_message,
+        status=job.status.value,
+    )

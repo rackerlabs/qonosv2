@@ -34,6 +34,7 @@ class ScheduleBase(BaseModel):
     action_type: str = Field(..., max_length=100)
     cron_expression: str = Field(..., max_length=255)
     action_parameters: Dict[str, Any]
+    webhook_url: Optional[str] = Field(default=None, max_length=2048)
     retention_policy: Optional[RetentionPolicy] = None
     execution_profile_id: Optional[str] = Field(
         ...,
@@ -67,6 +68,7 @@ class ScheduleUpdate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=4096)
     cron_expression: Optional[str] = Field(default=None, max_length=255)
     action_parameters: Optional[Dict[str, Any]] = None
+    webhook_url: Optional[str] = Field(default=None, max_length=2048)
     retention_policy: Optional[RetentionPolicy] = None
     execution_profile_id: Optional[str] = Field(
         default=None,

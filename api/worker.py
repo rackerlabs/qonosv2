@@ -14,7 +14,8 @@ from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from uvicorn import Config as UvicornConfig, Server as UvicornServer
 
-from api.app.messaging.redis_stream import consume_job_events
+from api.app.messaging.amqp_queue import consume_job_events
+from api.app.notifications import get_job_event_notifier
 from api.app.config import AppConfig, get_config
 from api.app.db import close_db_engine, get_session_factory
 from api.app.logging import configure_logging
@@ -76,7 +77,7 @@ class WorkerRuntime:
     def __init__(self, cfg: AppConfig, registry: HandlerRegistry) -> None:
         self.cfg = cfg
         self.registry = registry
-        self.worker_id = cfg.redis_consumer_name
+        self.worker_id = cfg.worker_id
         self.session_factory = get_session_factory()
         self.metrics = WorkerMetrics()
         self._stop = asyncio.Event()
@@ -85,6 +86,7 @@ class WorkerRuntime:
         self._wake = asyncio.Event()
         self._last_stale_sweep_at: Optional[datetime] = None
         self._last_job_cleanup_at: Optional[datetime] = None
+        self.notifier = get_job_event_notifier()
 
     async def run(self) -> None:
         logger.info(
@@ -107,12 +109,9 @@ class WorkerRuntime:
                     self._last_stale_sweep_at = now
                     self._wake.set()
                 cleanup_interval = self.cfg.job_cleanup_interval_seconds
-                if (
-                    self.cfg.job_cleanup_enabled
-                    and (
-                        self._last_job_cleanup_at is None
-                        or (now - self._last_job_cleanup_at).total_seconds() >= cleanup_interval
-                    )
+                if self.cfg.job_cleanup_enabled and (
+                    self._last_job_cleanup_at is None
+                    or (now - self._last_job_cleanup_at).total_seconds() >= cleanup_interval
                 ):
                     await self._cleanup_expired_jobs_once()
                     self._last_job_cleanup_at = now
@@ -162,6 +161,7 @@ class WorkerRuntime:
             if self.metrics.inflight >= self.cfg.worker_concurrency:
                 break
             self.metrics.claimed += 1
+            await self._emit_event_for_job_id(job_id=job_id, event_type="job.started")
             await self._spawn(self._process_claimed_job(job_id))
 
     async def _claim_due_jobs_batch(
@@ -216,6 +216,7 @@ class WorkerRuntime:
             claimed = await self._claim_job(job_id=job.id, expected_version=job.version)
             if claimed:
                 self.metrics.claimed += 1
+                await self._emit_event_for_job_id(job_id=job.id, event_type="job.started")
                 await self._spawn(self._process_claimed_job(job.id))
 
     async def _run_in_slot(self, coro: Any) -> None:
@@ -277,6 +278,35 @@ class WorkerRuntime:
     ) -> Optional[ScheduleModel]:
         result = await session.execute(select(ScheduleModel).where(ScheduleModel.id == schedule_id))
         return result.scalar_one_or_none()
+
+    async def _emit_event_for_job_id(
+        self,
+        *,
+        job_id: str,
+        event_type: str,
+        error_message: str | None = None,
+        status: str | None = None,
+    ) -> None:
+        try:
+            async with self.session_factory() as session:
+                job = await self._load_job(session, job_id)
+                if job is None:
+                    return
+                schedule = await self._load_schedule(session, job.schedule_id)
+            self.notifier.emit_non_blocking(
+                event_type=event_type,
+                job=job,
+                schedule_webhook_url=(schedule.webhook_url if schedule else None),
+                error_message=error_message,
+                status=status,
+            )
+        except Exception as exc:
+            logger.warning(
+                "notification emit failed decision=non_fatal event=%s job_id=%s error=%s",
+                event_type,
+                job_id,
+                str(exc),
+            )
 
     async def _run_retention(self, *, job: JobModel, trigger_status: JobStatusModel) -> None:
         try:
@@ -474,7 +504,9 @@ class WorkerRuntime:
                 if not job_ids:
                     return 0
 
-                await session.execute(delete(JobFaultModel).where(JobFaultModel.job_id.in_(job_ids)))
+                await session.execute(
+                    delete(JobFaultModel).where(JobFaultModel.job_id.in_(job_ids))
+                )
                 await session.execute(delete(JobModel).where(JobModel.id.in_(job_ids)))
 
         logger.info(
@@ -516,6 +548,12 @@ class WorkerRuntime:
             await session.commit()
             self.metrics.hard_timed_out += 1
             logger.warning("job timeout decision=hard_timeout_sweep job_id=%s", job_id)
+            await self._emit_event_for_job_id(
+                job_id=job_id,
+                event_type="job.timed_out",
+                error_message="hard timeout exceeded (sweep)",
+                status=JobStatusModel.HARD_TIMED_OUT.value,
+            )
             job = await self._load_job(session, job_id)
             if job is not None:
                 await self._record_fault(
@@ -664,6 +702,11 @@ class WorkerRuntime:
                 )
                 if ok:
                     self.metrics.completed += 1
+                    await self._emit_event_for_job_id(
+                        job_id=job.id,
+                        event_type="job.completed",
+                        status=JobStatusModel.DONE.value,
+                    )
                     with suppress(Exception):
                         await handler.on_success(job)
                     await self._run_retention(job=job, trigger_status=JobStatusModel.DONE)
@@ -679,6 +722,12 @@ class WorkerRuntime:
                 )
                 if ok:
                     self.metrics.hard_timed_out += 1
+                    await self._emit_event_for_job_id(
+                        job_id=job.id,
+                        event_type="job.timed_out",
+                        error_message="hard timeout exceeded",
+                        status=JobStatusModel.HARD_TIMED_OUT.value,
+                    )
                     await self._record_fault(
                         job=job,
                         code="qonos.job.hard_timeout",
@@ -790,7 +839,28 @@ class WorkerRuntime:
                     await handler.on_failure(job, error)
 
         if failure_status == JobStatusModel.HARD_TIMED_OUT:
+            await self._emit_event_for_job_id(
+                job_id=job.id,
+                event_type="job.timed_out",
+                error_message=err_text,
+                status=failure_status.value,
+            )
             return
+
+        if failure_status == JobStatusModel.TIMED_OUT:
+            await self._emit_event_for_job_id(
+                job_id=job.id,
+                event_type="job.timed_out",
+                error_message=err_text,
+                status=failure_status.value,
+            )
+        else:
+            await self._emit_event_for_job_id(
+                job_id=job.id,
+                event_type="job.failed",
+                error_message=err_text,
+                status=failure_status.value,
+            )
 
         if job.retry_count >= self.cfg.worker_max_retry:
             moved = await self._transition(
@@ -832,6 +902,12 @@ class WorkerRuntime:
         )
         if ok:
             self.metrics.retried += 1
+            await self._emit_event_for_job_id(
+                job_id=job.id,
+                event_type="job.retrying",
+                error_message=err_text,
+                status=JobStatusModel.QUEUED.value,
+            )
 
 
 def _build_health_app(runtime: WorkerRuntime) -> FastAPI:
@@ -878,30 +954,30 @@ async def run_worker() -> None:
 
     worker_task = asyncio.create_task(runtime.run())
     health_task = asyncio.create_task(uvicorn_server.serve())
-    redis_task: Optional[asyncio.Task[Any]] = None
-    if cfg.redis_enabled and cfg.redis_url:
-        redis_task = asyncio.create_task(
+    queue_consumer_task: Optional[asyncio.Task[Any]] = None
+    amqp_url = cfg.amqp_url
+    if amqp_url:
+        queue_consumer_task = asyncio.create_task(
             consume_job_events(
-                redis_url=cfg.redis_url,
-                stream=cfg.redis_stream,
-                consumer_group=cfg.redis_consumer_group,
-                consumer_name=cfg.redis_consumer_name,
+                amqp_url=amqp_url,
+                exchange=cfg.job_queue_exchange,
+                queue_name=cfg.job_queue_name,
+                routing_key=cfg.job_queue_routing_key,
                 on_job_queued=runtime.on_job_queued_event,
-                block_ms=cfg.redis_block_timeout_ms,
-                count=max(1, cfg.worker_concurrency * 2),
+                prefetch_count=max(cfg.job_queue_prefetch_count, cfg.worker_concurrency * 2),
             )
         )
 
     try:
         tasks = [worker_task, health_task]
-        if redis_task is not None:
-            tasks.append(redis_task)
+        if queue_consumer_task is not None:
+            tasks.append(queue_consumer_task)
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         runtime.stop()
         uvicorn_server.should_exit = True
-        if redis_task is not None:
-            redis_task.cancel()
+        if queue_consumer_task is not None:
+            queue_consumer_task.cancel()
         raise
     finally:
         runtime.stop()
@@ -910,10 +986,10 @@ async def run_worker() -> None:
             await worker_task
         with suppress(Exception):
             await health_task
-        if redis_task is not None:
-            redis_task.cancel()
+        if queue_consumer_task is not None:
+            queue_consumer_task.cancel()
             with suppress(Exception):
-                await redis_task
+                await queue_consumer_task
         await close_db_engine()
 
 

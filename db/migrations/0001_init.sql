@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS schedules (
   action_type VARCHAR(100) NOT NULL,
   cron_expression VARCHAR(255) NOT NULL,
   action_parameters JSON NOT NULL,
+  webhook_url TEXT NULL,
   retention_policy JSON NULL,
   execution_profile_id CHAR(36) NULL,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -123,3 +124,18 @@ CREATE TABLE IF NOT EXISTS job_faults (
 
 CREATE INDEX job_faults_job_id_idx ON job_faults(job_id, occurred_at);
 CREATE INDEX job_faults_project_id_idx ON job_faults(project_id, occurred_at);
+
+-- Seed built-in action types
+INSERT IGNORE INTO action_types (action_type, name, description, action_parameters_schema, enabled)
+VALUES (
+  'server_snapshot',
+  'Server snapshot',
+  'Create a Glance image snapshot of a Nova server instance',
+  JSON_OBJECT(
+    'type','object',
+    'properties', JSON_OBJECT('server_id', JSON_OBJECT('type','string')),
+    'required', JSON_ARRAY('server_id'),
+    'additionalProperties', true
+  ),
+  TRUE
+);

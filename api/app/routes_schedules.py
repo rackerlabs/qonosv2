@@ -266,6 +266,7 @@ async def create_schedule(
         action_type=payload.action_type,
         cron_expression=payload.cron_expression,
         action_parameters=payload.action_parameters,
+        webhook_url=payload.webhook_url,
         retention_policy=_normalize_retention_policy_for_storage(payload),
         execution_profile_id=resolved_execution_profile_id,
         enabled=payload.enabled,
