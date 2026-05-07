@@ -8,7 +8,7 @@ from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-from api.app.messaging.redis_stream import publish_job_queued
+from api.app.messaging.amqp_queue import publish_job_queued
 from api.app.config import get_config
 from api.app.db import get_session_factory
 from api.app.logging import configure_logging
@@ -178,20 +178,22 @@ async def _create_job_for_schedule_cas(
     )
 
     cfg = get_config()
-    if cfg.redis_enabled and cfg.redis_url:
+    amqp_url = cfg.amqp_url
+    if amqp_url:
         try:
             await publish_job_queued(
-                redis_url=cfg.redis_url,
-                stream=cfg.redis_stream,
+                amqp_url=amqp_url,
+                exchange=cfg.job_queue_exchange,
+                routing_key=cfg.job_queue_routing_key,
                 job_id=job_id,
                 action_type=schedule.action_type,
                 project_id=schedule.project_id,
-                max_len=cfg.redis_stream_max_len,
             )
             logger.info(
-                "scheduler event decision=published_job_queued job_id=%s stream=%s",
+                "scheduler event decision=published_job_queued job_id=%s exchange=%s routing_key=%s",
                 job_id,
-                cfg.redis_stream,
+                cfg.job_queue_exchange,
+                cfg.job_queue_routing_key,
             )
         except Exception as exc:
             logger.warning(

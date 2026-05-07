@@ -80,6 +80,7 @@ class Schedule(Base):
     )
     cron_expression: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     action_parameters: Mapped[dict[str, Any]] = mapped_column(sa.JSON, nullable=False)
+    webhook_url: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
     retention_policy: Mapped[Optional[dict[str, Any]]] = mapped_column(sa.JSON, nullable=True)
     execution_profile_id: Mapped[Optional[str]] = mapped_column(
         sa.CHAR(36), sa.ForeignKey("execution_profiles.id"), nullable=True, index=True

@@ -829,6 +829,11 @@ components:
           additionalProperties: true
           example:
             server_id: "123e4567-e89b-12d3-a456-426614174000"
+        webhook_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Optional per-schedule webhook endpoint for job lifecycle notifications.
         retention_policy:
           $ref: '#/components/schemas/RetentionPolicy'
         execution_profile_id:
@@ -915,6 +920,11 @@ components:
           additionalProperties: true
           example:
             server_id: "123e4567-e89b-12d3-a456-426614174000"
+        webhook_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Optional per-schedule webhook endpoint for job lifecycle notifications.
         retention_policy:
           $ref: '#/components/schemas/RetentionPolicy'
         execution_profile_id:
@@ -952,6 +962,11 @@ components:
           additionalProperties: true
           example:
             server_id: "123e4567-e89b-12d3-a456-426614174000"
+        webhook_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Optional per-schedule webhook endpoint for job lifecycle notifications.
         retention_policy:
           $ref: '#/components/schemas/RetentionPolicy'
         execution_profile_id:

@@ -17,7 +17,7 @@ from api.tests.test_auth_rbac import (
     PROJECT1_MEMBER,
     SERVICE_TOKEN,
     _auth,
-     async_client
+    async_client,
 )
 from db.src.models import Job as JobModel, JobFault as JobFaultModel, JobStatus as JobStatusModel
 
@@ -39,7 +39,7 @@ async def test_job_list_filters_and_pagination(async_client: httpx.AsyncClient) 
     )
     assert schedule_resp.status_code == 201, schedule_resp.text
     schedule = schedule_resp.json()
-    
+
     job1_resp = await async_client.post(
         "/v2/jobs",
         headers=_auth({"X-Auth-Token": SERVICE_TOKEN}),

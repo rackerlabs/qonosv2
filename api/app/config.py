@@ -52,15 +52,15 @@ class AppConfig:
     server_snapshot_poll_interval_seconds: float = 5.0
     server_snapshot_poll_timeout_seconds: float = 600.0
 
-    redis_enabled: bool = False
-    redis_url: Optional[str] = None
-
-    redis_stream: str = "qonos:jobs"
-    redis_consumer_group: str = "qonos-workers"
-    redis_consumer_name: str = "auto"
-
-    redis_stream_max_len: Optional[int] = 10000
-    redis_block_timeout_ms: int = 5000
+    worker_id: str = "auto"
+    amqp_url: Optional[str] = None
+    job_queue_exchange: str = "qonos.jobs"
+    job_queue_routing_key: str = "qonos.jobs.queued"
+    job_queue_name: str = "qonos.jobs.queue"
+    job_queue_prefetch_count: int = 50
+    notification_exchange: str = "qonos.events"
+    notification_routing_key: str = "qonos.jobs.lifecycle"
+    notification_webhook_timeout_seconds: float = 3.0
 
 
 def _read_secret_file(path: str) -> str:
@@ -138,6 +138,7 @@ def get_config() -> AppConfig:
         worker_backoff_jitter=get_bool("worker", "backoff_jitter", True),
         worker_health_host=get_str("worker", "health_host", "0.0.0.0") or "0.0.0.0",
         worker_health_port=max(1, min(65535, get_int("worker", "health_port", 8081))),
+        worker_id=get_str("worker", "id", "auto") or "auto",
         worker_stale_processing_sweep_interval_seconds=max(
             10.0, get_float("worker", "stale_processing_sweep_interval_seconds", 120.0)
         ),
@@ -157,15 +158,23 @@ def get_config() -> AppConfig:
         server_snapshot_poll_timeout_seconds=max(
             0.1, get_float("worker", "server_snapshot_poll_timeout_seconds", 600.0)
         ),
-        redis_url=get_str("redis", "url", None),
-        redis_enabled=get_bool("redis", "enabled", False),
-        redis_stream=get_str("redis", "stream", "qonos:jobs") or "qonos:jobs",
-        redis_stream_max_len=10000,
-        redis_consumer_group=(
-            get_str("redis", "consumer_group", "qonos-workers") or "qonos-workers"
+        amqp_url=get_str("amqp", "url", None),
+        job_queue_exchange=(get_str("amqp", "job_exchange", "qonos.jobs") or "qonos.jobs"),
+        job_queue_routing_key=(
+            get_str("amqp", "job_routing_key", "qonos.jobs.queued") or "qonos.jobs.queued"
         ),
-        redis_consumer_name=get_str("redis", "consumer_name", "auto") or "auto",
-        redis_block_timeout_ms=max(1, get_int("redis", "block_timeout_ms", 5000)),
+        job_queue_name=(get_str("amqp", "job_queue", "qonos.jobs.queue") or "qonos.jobs.queue"),
+        job_queue_prefetch_count=max(1, get_int("amqp", "job_prefetch_count", 50)),
+        notification_exchange=(
+            get_str("amqp", "notification_exchange", "qonos.events") or "qonos.events"
+        ),
+        notification_routing_key=(
+            get_str("amqp", "notification_routing_key", "qonos.jobs.lifecycle")
+            or "qonos.jobs.lifecycle"
+        ),
+        notification_webhook_timeout_seconds=max(
+            0.1, get_float("notifications", "webhook_timeout_seconds", 3.0)
+        ),
     )
 
     keystone_service_password_file = get_str("keystone", "service_password_file", None)
@@ -190,13 +199,7 @@ def get_config() -> AppConfig:
         h = cfg.worker_hard_timeout_seconds
         cfg.worker_stale_processing_after_seconds = max(h * 2, h + 60.0)
 
-    if (cfg.redis_consumer_name or "").strip().lower() == "auto":
-        cfg.redis_consumer_name = f"{socket.gethostname()}-{os.getpid()}"
-
-    if parser.has_option("redis", "stream_max_len"):
-        _rmax = get_int("redis", "stream_max_len", 0)
-        cfg.redis_stream_max_len = None if _rmax <= 0 else max(1, _rmax)
-    else:
-        cfg.redis_stream_max_len = 10000
+    if (cfg.worker_id or "").strip().lower() == "auto":
+        cfg.worker_id = f"{socket.gethostname()}-{os.getpid()}"
 
     return cfg
