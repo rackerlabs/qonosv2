@@ -15,7 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uvicorn import Config as UvicornConfig, Server as UvicornServer
 
 from api.app.messaging.amqp_queue import consume_job_events
-from api.app.notifications import get_job_event_notifier
+from api.app.notifications import (
+    close_notification_publishers,
+    drain_pending_deliveries,
+    get_job_event_notifier,
+)
 from api.app.config import AppConfig, get_config
 from api.app.db import close_db_engine, get_session_factory
 from api.app.logging import configure_logging
@@ -126,6 +130,8 @@ class WorkerRuntime:
             pass
         finally:
             await self._drain_tasks()
+            await drain_pending_deliveries()
+            await close_notification_publishers()
             logger.info("worker stopped decision=shutdown")
 
     def stop(self) -> None:
@@ -990,6 +996,8 @@ async def run_worker() -> None:
             queue_consumer_task.cancel()
             with suppress(Exception):
                 await queue_consumer_task
+        await drain_pending_deliveries()
+        await close_notification_publishers()
         await close_db_engine()
 
 

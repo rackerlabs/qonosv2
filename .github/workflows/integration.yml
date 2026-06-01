@@ -1,0 +1,51 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: qonosv2_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -e ".[test]"
+
+      - name: Apply database migration
+        run: |
+          sudo apt-get update && sudo apt-get install -y mariadb-client
+          mysql -h 127.0.0.1 -P 3306 -u root -proot qonosv2_test < db/migrations/0001_init.sql
+
+      - name: Run integration tests with coverage
+        env:
+          QONOS_CONFIG_FILE: config/qonos.integration.conf
+          QONOS_TEST_DB_URL: mysql+aiomysql://root:root@127.0.0.1:3306/qonosv2_test
+        run: |
+          pytest api/tests/integration -m integration \
+            --cov=api --cov=db \
+            --cov-report=term-missing \
+            -v

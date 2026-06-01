@@ -108,6 +108,7 @@ async def create_execution_profile(
         description=payload.description,
         auth_type=payload.auth_type,
         trust_id=payload.trust_id,
+        created_by_user_id=auth.user_id,
         enabled=payload.enabled,
         created_at=now,
         updated_at=now,
@@ -157,7 +158,15 @@ async def update_execution_profile(
         except Exception:
             raw_body = {}
         readonly_attempts = [
-            field for field in ("id", "project_id", "created_at", "deleted_at") if field in raw_body
+            field
+            for field in (
+                "id",
+                "project_id",
+                "created_by_user_id",
+                "created_at",
+                "deleted_at",
+            )
+            if field in raw_body
         ]
         if readonly_attempts:
             raise HTTPException(

@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS execution_profiles (
   description TEXT NULL,
   auth_type VARCHAR(32) NOT NULL DEFAULT 'trust',
   trust_id CHAR(36) NULL,
+  created_by_user_id CHAR(36) NULL,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS execution_profiles (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE INDEX execution_profiles_project_id_idx ON execution_profiles(project_id);
+CREATE INDEX execution_profiles_created_by_user_id_idx ON execution_profiles(created_by_user_id);
 CREATE UNIQUE INDEX execution_profiles_project_name_uniq ON execution_profiles(project_id, name);
 
 -- Schedules

@@ -1024,6 +1024,12 @@ components:
           type: string
           format: uuid
           description: Keystone trust UUID used for delegated execution.
+        created_by_user_id:
+          type: string
+          format: uuid
+          nullable: true
+          readOnly: true
+          description: Keystone user ID of the profile creator (set by the API on create).
         enabled:
           type: boolean
         created_at:

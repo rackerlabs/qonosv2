@@ -14,12 +14,9 @@ class AppConfig:
 
     keystone_url: Optional[str] = None
     keystone_verify_ssl: bool = True
-    keystone_auth_mode: str = "password"
     keystone_service_username: Optional[str] = None
     keystone_service_password: Optional[str] = None
     keystone_service_user_domain_name: str = "Default"
-    keystone_service_app_credential_id: Optional[str] = None
-    keystone_service_app_credential_secret: Optional[str] = None
 
     db_url: Optional[str] = None
 
@@ -113,15 +110,10 @@ def get_config() -> AppConfig:
     cfg = AppConfig(
         keystone_url=get_str("keystone", "url", None),
         keystone_verify_ssl=get_bool("keystone", "verify_ssl", True),
-        keystone_auth_mode=(get_str("keystone", "auth_mode", "password") or "password").lower(),
         keystone_service_username=get_str("keystone", "service_username", None),
         keystone_service_password=get_str("keystone", "service_password", None),
         keystone_service_user_domain_name=(
             get_str("keystone", "service_user_domain_name", "Default") or "Default"
-        ),
-        keystone_service_app_credential_id=get_str("keystone", "service_app_credential_id", None),
-        keystone_service_app_credential_secret=get_str(
-            "keystone", "service_app_credential_secret", None
         ),
         db_url=get_str("database", "url", None),
         policy_file=get_str("policy", "file", None),
@@ -180,20 +172,6 @@ def get_config() -> AppConfig:
     keystone_service_password_file = get_str("keystone", "service_password_file", None)
     if not cfg.keystone_service_password and keystone_service_password_file:
         cfg.keystone_service_password = _read_secret_file(keystone_service_password_file)
-
-    keystone_service_app_credential_secret_file = get_str(
-        "keystone", "service_app_credential_secret_file", None
-    )
-    if (
-        not cfg.keystone_service_app_credential_secret
-        and keystone_service_app_credential_secret_file
-    ):
-        cfg.keystone_service_app_credential_secret = _read_secret_file(
-            keystone_service_app_credential_secret_file
-        )
-
-    if cfg.keystone_auth_mode not in {"password", "app_credential"}:
-        cfg.keystone_auth_mode = "password"
 
     if cfg.worker_stale_processing_after_seconds is None:
         h = cfg.worker_hard_timeout_seconds
