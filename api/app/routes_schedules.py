@@ -48,9 +48,6 @@ async def _validate_trust_for_project(*, project_id: str, trust_id: Optional[str
         )
     client = HttpKeystoneClient(
         base_url=cfg.keystone_url,
-        auth_mode="password",
-        service_app_credential_id=cfg.keystone_service_app_credential_id,
-        service_app_credential_secret=cfg.keystone_service_app_credential_secret,
         service_username=cfg.keystone_service_username,
         service_password=cfg.keystone_service_password,
         service_user_domain_name=cfg.keystone_service_user_domain_name,

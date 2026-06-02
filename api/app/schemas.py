@@ -175,6 +175,10 @@ class ExecutionProfileUpdate(BaseModel):
 class ExecutionProfile(ExecutionProfileBase):
     id: str
     project_id: str
+    created_by_user_id: Optional[str] = Field(
+        default=None,
+        description="Keystone user ID of the profile creator (set by the API on create).",
+    )
     created_at: datetime
     updated_at: datetime
 

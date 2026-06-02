@@ -16,7 +16,7 @@ def _is_valid_uuid(value: str) -> bool:
 def build_openstack_connection(*, project_id: str, trust_id: str | None = None):
     """Build an OpenStackSDK Connection for the target project.
 
-    Use configured Keystone auth mode for service credentials.
+    Use configured Keystone service username/password (and trust_id when provided).
     """
     cfg = get_config()
     from openstack import connection as os_connection
@@ -29,8 +29,6 @@ def build_openstack_connection(*, project_id: str, trust_id: str | None = None):
         raise RuntimeError("Invalid trust_id configured; expected UUID format")
     if not effective_trust_id and not _is_valid_uuid((project_id or "").strip()):
         raise RuntimeError("Invalid project_id configured; expected UUID format")
-
-    auth_mode = (cfg.keystone_auth_mode or "password").lower()
 
     if effective_trust_id:
         if not cfg.keystone_service_username or not cfg.keystone_service_password:
@@ -50,43 +48,19 @@ def build_openstack_connection(*, project_id: str, trust_id: str | None = None):
             compute_api_version="2",
         )
 
-    if auth_mode == "password":
-        if not cfg.keystone_service_username or not cfg.keystone_service_password:
-            raise RuntimeError(
-                "Missing Keystone password auth credentials: service_username/service_password"
-            )
-        return os_connection.Connection(
-            auth_type="password",
-            auth={
-                "auth_url": cfg.keystone_url,
-                "username": cfg.keystone_service_username,
-                "password": cfg.keystone_service_password,
-                "user_domain_name": cfg.keystone_service_user_domain_name,
-                "project_id": project_id,
-            },
-            verify=cfg.keystone_verify_ssl,
-            compute_api_version="2",
+    if not cfg.keystone_service_username or not cfg.keystone_service_password:
+        raise RuntimeError(
+            "Missing Keystone password auth credentials: service_username/service_password"
         )
-
-    if auth_mode == "app_credential":
-        if (
-            not cfg.keystone_service_app_credential_id
-            or not cfg.keystone_service_app_credential_secret
-        ):
-            raise RuntimeError(
-                "Missing Keystone app credential auth configuration: service_app_credential_id/service_app_credential_secret"
-            )
-        return os_connection.Connection(
-            auth_type="v3applicationcredential",
-            auth={
-                "auth_url": cfg.keystone_url,
-                "application_credential_id": cfg.keystone_service_app_credential_id,
-                "application_credential_secret": cfg.keystone_service_app_credential_secret,
-            },
-            verify=cfg.keystone_verify_ssl,
-            compute_api_version="2",
-        )
-
-    raise RuntimeError(
-        f"Invalid keystone auth_mode '{auth_mode}'. Expected 'password' or 'app_credential'."
+    return os_connection.Connection(
+        auth_type="password",
+        auth={
+            "auth_url": cfg.keystone_url,
+            "username": cfg.keystone_service_username,
+            "password": cfg.keystone_service_password,
+            "user_domain_name": cfg.keystone_service_user_domain_name,
+            "project_id": project_id,
+        },
+        verify=cfg.keystone_verify_ssl,
+        compute_api_version="2",
     )

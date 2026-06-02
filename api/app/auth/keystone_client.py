@@ -29,9 +29,6 @@ class HttpKeystoneClient(KeystoneClient):
         self,
         base_url: str,
         *,
-        auth_mode: str = "password",
-        service_app_credential_id: str | None = None,
-        service_app_credential_secret: str | None = None,
         service_username: str | None = None,
         service_password: str | None = None,
         service_user_domain_name: str = "Default",
@@ -42,9 +39,6 @@ class HttpKeystoneClient(KeystoneClient):
         if normalized.endswith("/v3"):
             normalized = normalized[: -len("/v3")]
         self._base_url = normalized
-        self._auth_mode = (auth_mode or "password").lower()
-        self._service_app_credential_id = service_app_credential_id
-        self._service_app_credential_secret = service_app_credential_secret
         self._service_username = service_username
         self._service_password = service_password
         self._service_user_domain_name = service_user_domain_name
@@ -67,38 +61,6 @@ class HttpKeystoneClient(KeystoneClient):
         if not self._cached_validation_token or not self._cached_validation_token_expires_at:
             return False
         return datetime.now(timezone.utc) < self._cached_validation_token_expires_at
-
-    async def _request_service_token_with_app_credential(self) -> tuple[str, datetime]:
-        if not self._service_app_credential_id or not self._service_app_credential_secret:
-            raise ValueError("service app credentials are not configured")
-        url = f"{self._base_url}/v3/auth/tokens"
-        payload = {
-            "auth": {
-                "identity": {
-                    "methods": ["application_credential"],
-                    "application_credential": {
-                        "id": self._service_app_credential_id,
-                        "secret": self._service_app_credential_secret,
-                    },
-                }
-            }
-        }
-        try:
-            async with httpx.AsyncClient(verify=self._verify_ssl, timeout=self._timeout) as client:
-                resp = await client.post(url, json=payload)
-        except httpx.RequestError as exc:
-            raise ValueError(f"Keystone app-credential auth request failed: {str(exc)}") from exc
-        if resp.status_code != 201:
-            body_snippet = self._response_snippet(resp)
-            detail = f" body={body_snippet}" if body_snippet else ""
-            raise ValueError(f"App-credential auth failed with status {resp.status_code}.{detail}")
-        token = resp.headers.get("X-Subject-Token")
-        body = resp.json()
-        expires_at_raw = ((body.get("token") or {}).get("expires_at") or "").strip()
-        if not token or not expires_at_raw:
-            raise ValueError("Malformed Keystone response during app-credential auth")
-        expires_at = datetime.fromisoformat(expires_at_raw.replace("Z", "+00:00"))
-        return token, expires_at
 
     async def _request_service_token_with_password(self) -> tuple[str, datetime]:
         if not self._service_username or not self._service_password:
@@ -142,27 +104,14 @@ class HttpKeystoneClient(KeystoneClient):
             if self._cached_token_is_valid():
                 return self._cached_validation_token or ""
 
-            if self._auth_mode == "password":
-                if not self._service_username or not self._service_password:
-                    raise ValueError(
-                        "Keystone auth_mode=password requires service_username and service_password."
-                    )
-                token, expires_at = await self._request_service_token_with_password()
-                self._cached_validation_token = token
-                self._cached_validation_token_expires_at = expires_at - timedelta(seconds=30)
-                return token
-
-            if self._auth_mode == "app_credential":
-                if not self._service_app_credential_id or not self._service_app_credential_secret:
-                    raise ValueError(
-                        "Keystone auth_mode=app_credential requires app credential id and secret."
-                    )
-                token, expires_at = await self._request_service_token_with_app_credential()
-                self._cached_validation_token = token
-                self._cached_validation_token_expires_at = expires_at - timedelta(seconds=30)
-                return token
-
-            raise ValueError("Invalid Keystone auth_mode. Expected 'password' or 'app_credential'.")
+            if not self._service_username or not self._service_password:
+                raise ValueError(
+                    "Keystone service token requires service_username and service_password."
+                )
+            token, expires_at = await self._request_service_token_with_password()
+            self._cached_validation_token = token
+            self._cached_validation_token_expires_at = expires_at - timedelta(seconds=30)
+            return token
 
     async def validate_token(self, token: str) -> AuthContext:
         """Call Keystone /v3/auth/tokens to validate the token and build AuthContext."""
