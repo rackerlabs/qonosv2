@@ -12,6 +12,7 @@ from api.app.utils.time import as_utc_aware, utc_now
 logger = logging.getLogger("qonos.worker.retention")
 
 _SKIP_IMAGE_STATUSES = {"DELETED", "PENDING_DELETE"}
+_SKIP_BACKUP_STATUSES = {"deleting", "deleted"}
 
 
 @dataclass
@@ -136,6 +137,85 @@ def _apply_server_snapshot_retention(
     }
 
 
+def _is_incremental_backup(backup: Any) -> bool:
+    value = getattr(backup, "is_incremental", False)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return bool(value)
+
+
+def _apply_volume_backup_full_retention(
+    *,
+    project_id: str,
+    schedule_id: str,
+    action_type: str,
+    policy: RetentionPolicy,
+    now: datetime,
+    trust_id: str | None = None,
+) -> dict[str, int]:
+    conn = _build_connection(project_id=project_id, trust_id=trust_id)
+    backups = list(conn.block_storage.backups(details=True))
+
+    candidates: list[tuple[str, datetime]] = []
+    for backup in backups:
+        backup_project = str(getattr(backup, "project_id", "") or "")
+        if backup_project and backup_project != project_id:
+            continue
+        if _is_incremental_backup(backup):
+            continue
+        meta = getattr(backup, "metadata", None) or {}
+        if not isinstance(meta, dict):
+            continue
+        if str(meta.get("qonos_managed", "")).lower() != "true":
+            continue
+        if meta.get("qonos_action_type") != action_type:
+            continue
+        if meta.get("qonos_schedule_id") != schedule_id:
+            continue
+        status = str(getattr(backup, "status", "") or "").lower()
+        if status in _SKIP_BACKUP_STATUSES:
+            continue
+        created_at = _parse_created_at(getattr(backup, "created_at", None))
+        if created_at is None:
+            continue
+        candidates.append((str(getattr(backup, "id")), created_at))
+
+    ids_to_delete: set[str] = set()
+    if policy.count is not None and policy.count > 0:
+        newest_first = sorted(candidates, key=lambda x: x[1], reverse=True)
+        for backup_id, _ in newest_first[policy.count :]:
+            ids_to_delete.add(backup_id)
+
+    if policy.max_age_days is not None and policy.max_age_days > 0:
+        cutoff = now - timedelta(days=policy.max_age_days)
+        for backup_id, created_at in candidates:
+            if created_at < cutoff:
+                ids_to_delete.add(backup_id)
+
+    deleted = 0
+    failed = 0
+    for backup_id in sorted(ids_to_delete):
+        try:
+            conn.block_storage.delete_backup(backup_id, ignore_missing=True)
+            deleted += 1
+        except TypeError:
+            try:
+                conn.block_storage.delete_backup(backup_id)
+                deleted += 1
+            except Exception:
+                failed += 1
+        except Exception:
+            failed += 1
+
+    return {
+        "scanned": len(backups),
+        "eligible": len(candidates),
+        "delete_candidates": len(ids_to_delete),
+        "deleted": deleted,
+        "delete_failed": failed,
+    }
+
+
 async def run_retention_for_job(
     *,
     action_type: str,
@@ -154,6 +234,16 @@ async def run_retention_for_job(
         if action_type == "server_snapshot":
             stats = await asyncio.to_thread(
                 _apply_server_snapshot_retention,
+                project_id=project_id,
+                schedule_id=schedule_id,
+                action_type=action_type,
+                policy=policy,
+                now=now,
+                trust_id=trust_id,
+            )
+        elif action_type == "volume_backup_full":
+            stats = await asyncio.to_thread(
+                _apply_volume_backup_full_retention,
                 project_id=project_id,
                 schedule_id=schedule_id,
                 action_type=action_type,
