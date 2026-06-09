@@ -26,7 +26,7 @@ class _FakeBackupAPI:
         self._backups = list(backups)
         self.deleted: list[str] = []
 
-    def backups(self, details: bool = True):
+    def backups(self, details: bool = True, volume_id: str | None = None, **kwargs):
         return list(self._backups)
 
     def delete_backup(self, backup_id: str, ignore_missing: bool = True):
@@ -209,6 +209,7 @@ async def test_volume_backup_full_retention_count_based(
         schedule_id="sched-1",
         retention_policy_raw={"type": "count", "value": 2},
         trigger_status="DONE",
+        volume_id="vol-1",
     )
 
     assert backup_api.deleted == ["b1"]

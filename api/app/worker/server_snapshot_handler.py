@@ -126,28 +126,26 @@ class ServerSnapshotActionHandler(ActionHandler):
         timeout = cfg.server_snapshot_poll_timeout_seconds
         deadline = time.monotonic() + timeout
         last_status = "UNKNOWN"
-        try:
-            while time.monotonic() < deadline:
-                image = conn.image.get_image(image_id)
-                if image is None:
-                    raise RuntimeError(f"Snapshot image not found after creation: {image_id}")
-                status = str(getattr(image, "status", "") or "").upper()
-                last_status = status or "UNKNOWN"
-                if status == "ACTIVE":
-                    return {
-                        "image_id": image_id,
-                        "image_name": image_name,
-                        "status": "ACTIVE",
-                    }
-                if status in FAILED_IMAGE_STATUSES:
-                    raise RuntimeError(
-                        f"Snapshot image entered failed status: {status} image_id={image_id}"
-                    )
-                time.sleep(poll_interval)
+        while time.monotonic() < deadline:
+            image = conn.image.get_image(image_id)
+            if image is None:
+                raise RuntimeError(f"Snapshot image not found after creation: {image_id}")
+            status = str(getattr(image, "status", "") or "").upper()
+            last_status = status or "UNKNOWN"
+            if status == "ACTIVE":
+                return {
+                    "image_id": image_id,
+                    "image_name": image_name,
+                    "status": "ACTIVE",
+                }
+            if status in FAILED_IMAGE_STATUSES:
+                self._cleanup_failed_snapshot(conn, image_id)
+                raise RuntimeError(
+                    f"Snapshot image entered failed status: {status} image_id={image_id}"
+                )
+            time.sleep(poll_interval)
 
-            raise TimeoutError(
-                f"Snapshot polling timed out image_id={image_id} last_status={last_status}"
-            )
-        except Exception:
-            self._cleanup_failed_snapshot(conn, image_id)
-            raise
+        self._cleanup_failed_snapshot(conn, image_id)
+        raise TimeoutError(
+            f"Snapshot polling timed out image_id={image_id} last_status={last_status}"
+        )

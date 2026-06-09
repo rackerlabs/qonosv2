@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -49,16 +51,24 @@ class _FakeBlockStorage:
         backup = self._backups.get(backup_id)
         if backup is None:
             return None
-        status = self._backup_statuses[min(self._poll_idx, len(self._backup_statuses) - 1)]
-        self._poll_idx += 1
+        status = self._backup_statuses[
+            min(self._poll_idx, len(self._backup_statuses) - 1)
+        ]
         backup.status = status
+        self._poll_idx += 1
         return backup
 
     def delete_backup(self, backup_id: str, ignore_missing: bool = True):
         self.deleted.append(backup_id)
         self._backups.pop(backup_id, None)
 
-    def backups(self, details: bool = True):
+    def backups(self, details: bool = True, volume_id: str | None = None, **kwargs):
+        for backup in self._backups.values():
+            status = self._backup_statuses[
+                min(self._poll_idx, len(self._backup_statuses) - 1)
+            ]
+            backup.status = status
+        self._poll_idx += 1
         return list(self._backups.values())
 
 
@@ -186,4 +196,138 @@ async def test_volume_backup_full_polling_timeout(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(TimeoutError, match="Volume backup polling timed out"):
         await handler.execute(_job(str(uuid4())))
-    assert conn.block_storage.deleted == ["bkp-123"]
+    assert conn.block_storage.deleted == []
+
+
+@pytest.mark.anyio
+async def test_volume_backup_full_create_backup_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = VolumeBackupFullActionHandler()
+    block = _FakeBlockStorage(volume_exists=True)
+
+    hang_forever = threading.Event()
+
+    def _hang(**attrs):
+        hang_forever.wait()
+        return None
+
+    block.create_backup = _hang  # type: ignore[method-assign]
+    conn = _FakeConn(block)
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+    )
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_full_handler.CREATE_BACKUP_TIMEOUT_SECONDS",
+        0.05,
+    )
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to create volume backup: timed out"):
+        await handler.execute(_job(str(uuid4())))
+
+
+@pytest.mark.anyio
+async def test_volume_backup_full_reuses_existing_job_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = VolumeBackupFullActionHandler()
+    job = _job(str(uuid4()))
+    block = _FakeBlockStorage(backup_statuses=["available"])
+    block._backups["bkp-existing"] = SimpleNamespace(
+        id="bkp-existing",
+        status="available",
+        name="existing-backup",
+        metadata={"qonos_job_id": job.id},
+        is_incremental=False,
+    )
+    conn = _FakeConn(block)
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+    )
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
+
+    result = await handler.execute(job)
+
+    assert result["backup_id"] == "bkp-existing"
+    assert result["backup_name"] == "existing-backup"
+    assert block.created_attrs is None
+
+
+@pytest.mark.anyio
+async def test_volume_backup_full_reuses_existing_backup_when_volume_is_backing_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = VolumeBackupFullActionHandler()
+    job = _job(str(uuid4()))
+    block = _FakeBlockStorage(
+        volume_status="backing-up",
+        backup_statuses=["creating", "available"],
+    )
+    block._backups["bkp-inflight"] = SimpleNamespace(
+        id="bkp-inflight",
+        status="creating",
+        name="inflight-backup",
+        metadata={"qonos_job_id": job.id},
+        is_incremental=False,
+    )
+    conn = _FakeConn(block)
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+    )
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
+
+    result = await handler.execute(job)
+
+    assert result["backup_id"] == "bkp-inflight"
+    assert result["status"] == "available"
+    assert block.created_attrs is None
+
+
+@pytest.mark.anyio
+async def test_volume_backup_full_rejects_backing_up_volume_without_existing_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = VolumeBackupFullActionHandler()
+    block = _FakeBlockStorage(volume_status="backing-up")
+    conn = _FakeConn(block)
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+    )
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
+
+    with pytest.raises(ValueError, match="status=backing-up"):
+        await handler.execute(_job(str(uuid4())))
+
+
+@pytest.mark.anyio
+async def test_volume_backup_full_falls_back_to_list_when_get_backup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = VolumeBackupFullActionHandler()
+    block = _FakeBlockStorage(volume_exists=True, backup_statuses=["creating", "available"])
+    block.get_backup = lambda backup_id: None  # type: ignore[method-assign]
+    conn = _FakeConn(block)
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+    )
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
+
+    result = await handler.execute(_job(str(uuid4())))
+
+    assert result["status"] == "available"

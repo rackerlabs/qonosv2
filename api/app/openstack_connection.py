@@ -13,6 +13,17 @@ def _is_valid_uuid(value: str) -> bool:
     return True
 
 
+def _connection_kwargs(cfg) -> dict:
+    kwargs: dict = {
+        "verify": cfg.keystone_verify_ssl,
+        "compute_api_version": "2",
+    }
+    interface = (cfg.endpoint_type or "").strip().lower()
+    if interface:
+        kwargs["interface"] = interface
+    return kwargs
+
+
 def build_openstack_connection(*, project_id: str, trust_id: str | None = None):
     """Build an OpenStackSDK Connection for the target project.
 
@@ -24,6 +35,7 @@ def build_openstack_connection(*, project_id: str, trust_id: str | None = None):
     if not cfg.keystone_url:
         raise RuntimeError("Missing Keystone URL configuration")
 
+    conn_kwargs = _connection_kwargs(cfg)
     effective_trust_id = (trust_id or "").strip()
     if effective_trust_id and not _is_valid_uuid(effective_trust_id):
         raise RuntimeError("Invalid trust_id configured; expected UUID format")
@@ -31,36 +43,34 @@ def build_openstack_connection(*, project_id: str, trust_id: str | None = None):
         raise RuntimeError("Invalid project_id configured; expected UUID format")
 
     if effective_trust_id:
-        if not cfg.keystone_service_username or not cfg.keystone_service_password:
+        if not cfg.keystone_username or not cfg.keystone_password:
             raise RuntimeError(
-                "Trust-based delegation requires service_username and service_password."
+                "Trust-based delegation requires username and password."
             )
         return os_connection.Connection(
             auth_type="password",
             auth={
                 "auth_url": cfg.keystone_url,
-                "username": cfg.keystone_service_username,
-                "password": cfg.keystone_service_password,
-                "user_domain_name": cfg.keystone_service_user_domain_name,
+                "username": cfg.keystone_username,
+                "password": cfg.keystone_password,
+                "user_domain_name": cfg.keystone_user_domain_name,
                 "trust_id": effective_trust_id,
             },
-            verify=cfg.keystone_verify_ssl,
-            compute_api_version="2",
+            **conn_kwargs,
         )
 
-    if not cfg.keystone_service_username or not cfg.keystone_service_password:
+    if not cfg.keystone_username or not cfg.keystone_password:
         raise RuntimeError(
-            "Missing Keystone password auth credentials: service_username/service_password"
+            "Missing Keystone password auth credentials: username/password"
         )
     return os_connection.Connection(
         auth_type="password",
         auth={
             "auth_url": cfg.keystone_url,
-            "username": cfg.keystone_service_username,
-            "password": cfg.keystone_service_password,
-            "user_domain_name": cfg.keystone_service_user_domain_name,
+            "username": cfg.keystone_username,
+            "password": cfg.keystone_password,
+            "user_domain_name": cfg.keystone_user_domain_name,
             "project_id": project_id,
         },
-        verify=cfg.keystone_verify_ssl,
-        compute_api_version="2",
+        **conn_kwargs,
     )

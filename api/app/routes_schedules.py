@@ -38,19 +38,21 @@ async def _validate_trust_for_project(*, project_id: str, trust_id: Optional[str
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Keystone URL must be configured when trust_id is provided.",
         )
-    if not cfg.keystone_service_username or not cfg.keystone_service_password:
+    if not cfg.keystone_username or not cfg.keystone_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "trust_id requires service_username/service_password credentials "
+                "trust_id requires username/password credentials "
                 "for delegated execution."
             ),
         )
     client = HttpKeystoneClient(
         base_url=cfg.keystone_url,
-        service_username=cfg.keystone_service_username,
-        service_password=cfg.keystone_service_password,
-        service_user_domain_name=cfg.keystone_service_user_domain_name,
+        username=cfg.keystone_username,
+        password=cfg.keystone_password,
+        user_domain_name=cfg.keystone_user_domain_name,
+        project_name=cfg.keystone_project_name,
+        project_domain_name=cfg.keystone_project_domain_name,
         verify_ssl=cfg.keystone_verify_ssl,
     )
     try:

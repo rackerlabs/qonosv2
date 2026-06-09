@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional, TypeVar
 
 from api.app.openstack_connection import build_openstack_connection
 from api.app.utils.time import as_utc_aware, utc_now
 
 logger = logging.getLogger("qonos.worker.retention")
 
+CINDER_API_TIMEOUT_SECONDS = 60.0
 _SKIP_IMAGE_STATUSES = {"DELETED", "PENDING_DELETE"}
-_SKIP_BACKUP_STATUSES = {"deleting", "deleted"}
+_SKIP_BACKUP_STATUSES = frozenset({"creating", "deleting", "deleted"})
+
+_T = TypeVar("_T")
 
 
 @dataclass
@@ -144,6 +149,76 @@ def _is_incremental_backup(backup: Any) -> bool:
     return bool(value)
 
 
+def _backup_status(backup: Any) -> str:
+    return str(getattr(backup, "status", "") or "").lower()
+
+
+def _cinder_call_with_timeout(
+    pool: ThreadPoolExecutor,
+    fn: Callable[[], _T],
+    *,
+    timeout: float,
+    operation: str,
+    subject_id: str,
+) -> _T | None:
+    future = pool.submit(fn)
+    try:
+        return future.result(timeout=timeout)
+    except FuturesTimeoutError:
+        logger.warning(
+            "retention %s timed out subject_id=%s timeout=%.0fs",
+            operation,
+            subject_id,
+            timeout,
+        )
+        return None
+    except Exception as exc:
+        logger.warning(
+            "retention %s failed subject_id=%s error=%s",
+            operation,
+            subject_id,
+            exc,
+        )
+        return None
+
+
+def _list_volume_backups(
+    pool: ThreadPoolExecutor, conn: Any, volume_id: str
+) -> list[Any]:
+    backups = _cinder_call_with_timeout(
+        pool,
+        lambda: list(conn.block_storage.backups(details=True, volume_id=volume_id)),
+        timeout=CINDER_API_TIMEOUT_SECONDS,
+        operation="backups_list",
+        subject_id=volume_id,
+    )
+    return backups or []
+
+
+def _empty_volume_retention_stats() -> dict[str, int]:
+    return {
+        "scanned": 0,
+        "eligible": 0,
+        "delete_candidates": 0,
+        "deleted": 0,
+        "delete_failed": 0,
+    }
+
+
+def _delete_backup(conn: Any, backup_id: str) -> bool:
+    try:
+        conn.block_storage.delete_backup(backup_id, ignore_missing=True)
+        return True
+    except TypeError:
+        try:
+            conn.block_storage.delete_backup(backup_id)
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
 def _apply_volume_backup_full_retention(
     *,
     project_id: str,
@@ -151,10 +226,19 @@ def _apply_volume_backup_full_retention(
     action_type: str,
     policy: RetentionPolicy,
     now: datetime,
+    volume_id: str | None = None,
     trust_id: str | None = None,
 ) -> dict[str, int]:
+    if not volume_id:
+        logger.warning(
+            "retention skipped decision=missing_volume_id schedule_id=%s",
+            schedule_id,
+        )
+        return _empty_volume_retention_stats()
+
     conn = _build_connection(project_id=project_id, trust_id=trust_id)
-    backups = list(conn.block_storage.backups(details=True))
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="retention-cinder") as pool:
+        backups = _list_volume_backups(pool, conn, volume_id)
 
     candidates: list[tuple[str, datetime]] = []
     for backup in backups:
@@ -172,8 +256,7 @@ def _apply_volume_backup_full_retention(
             continue
         if meta.get("qonos_schedule_id") != schedule_id:
             continue
-        status = str(getattr(backup, "status", "") or "").lower()
-        if status in _SKIP_BACKUP_STATUSES:
+        if _backup_status(backup) in _SKIP_BACKUP_STATUSES:
             continue
         created_at = _parse_created_at(getattr(backup, "created_at", None))
         if created_at is None:
@@ -195,16 +278,9 @@ def _apply_volume_backup_full_retention(
     deleted = 0
     failed = 0
     for backup_id in sorted(ids_to_delete):
-        try:
-            conn.block_storage.delete_backup(backup_id, ignore_missing=True)
+        if _delete_backup(conn, backup_id):
             deleted += 1
-        except TypeError:
-            try:
-                conn.block_storage.delete_backup(backup_id)
-                deleted += 1
-            except Exception:
-                failed += 1
-        except Exception:
+        else:
             failed += 1
 
     return {
@@ -223,6 +299,7 @@ async def run_retention_for_job(
     schedule_id: str,
     retention_policy_raw: Any,
     trigger_status: str,
+    volume_id: str | None = None,
     trust_id: str | None = None,
 ) -> None:
     policy = parse_retention_policy(retention_policy_raw)
@@ -249,6 +326,7 @@ async def run_retention_for_job(
                 action_type=action_type,
                 policy=policy,
                 now=now,
+                volume_id=volume_id,
                 trust_id=trust_id,
             )
         else:

@@ -305,9 +305,9 @@ def build_test_config(db_url: str) -> AppConfig:
     return AppConfig(
         keystone_url="http://keystone.test:5000/v3",
         keystone_verify_ssl=False,
-        keystone_service_username="qonos-service",
-        keystone_service_password="secret",
-        keystone_service_user_domain_name="Default",
+        keystone_username="qonos-service",
+        keystone_password="secret",
+        keystone_user_domain_name="Default",
         db_url=db_url,
         poll_interval_seconds=0.1,
         worker_concurrency=2,

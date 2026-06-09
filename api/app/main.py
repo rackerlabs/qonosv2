@@ -38,9 +38,11 @@ def create_app(*, keystone_client: KeystoneClient | None = None) -> FastAPI:
             raise RuntimeError("Keystone URL must be configured for HttpKeystoneClient")
         keystone_client = HttpKeystoneClient(
             base_url=cfg.keystone_url,
-            service_username=cfg.keystone_service_username,
-            service_password=cfg.keystone_service_password,
-            service_user_domain_name=cfg.keystone_service_user_domain_name,
+            username=cfg.keystone_username,
+            password=cfg.keystone_password,
+            user_domain_name=cfg.keystone_user_domain_name,
+            project_name=cfg.keystone_project_name,
+            project_domain_name=cfg.keystone_project_domain_name,
             verify_ssl=cfg.keystone_verify_ssl,
         )
     app.add_middleware(KeystoneAuthMiddleware, keystone_client=keystone_client)

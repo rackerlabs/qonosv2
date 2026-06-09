@@ -14,9 +14,13 @@ class AppConfig:
 
     keystone_url: Optional[str] = None
     keystone_verify_ssl: bool = True
-    keystone_service_username: Optional[str] = None
-    keystone_service_password: Optional[str] = None
-    keystone_service_user_domain_name: str = "Default"
+    keystone_username: Optional[str] = None
+    keystone_password: Optional[str] = None
+    keystone_user_domain_name: str = "Default"
+    keystone_project_name: Optional[str] = None
+    keystone_project_domain_name: Optional[str] = None
+
+    endpoint_type: Optional[str] = None
 
     db_url: Optional[str] = None
 
@@ -60,11 +64,6 @@ class AppConfig:
     notification_exchange: str = "qonos.events"
     notification_routing_key: str = "qonos.jobs.lifecycle"
     notification_webhook_timeout_seconds: float = 3.0
-
-
-def _read_secret_file(path: str) -> str:
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read().strip()
 
 
 def _load_config_file() -> configparser.ConfigParser:
@@ -112,11 +111,14 @@ def get_config() -> AppConfig:
     cfg = AppConfig(
         keystone_url=get_str("keystone", "url", None),
         keystone_verify_ssl=get_bool("keystone", "verify_ssl", True),
-        keystone_service_username=get_str("keystone", "service_username", None),
-        keystone_service_password=get_str("keystone", "service_password", None),
-        keystone_service_user_domain_name=(
-            get_str("keystone", "service_user_domain_name", "Default") or "Default"
+        keystone_username=get_str("keystone", "username", None),
+        keystone_password=get_str("keystone", "password", None),
+        keystone_user_domain_name=(
+            get_str("keystone", "user_domain_name", "Default") or "Default"
         ),
+        keystone_project_name=get_str("keystone", "project_name", None),
+        keystone_project_domain_name=get_str("keystone", "project_domain_name", None),
+        endpoint_type=get_str("openstack", "endpoint_type", None),
         db_url=get_str("database", "url", None),
         policy_file=get_str("policy", "file", None),
         poll_interval_seconds=max(0.1, get_float("scheduler", "poll_interval_seconds", 1.0)),
@@ -176,10 +178,6 @@ def get_config() -> AppConfig:
             0.1, get_float("notifications", "webhook_timeout_seconds", 3.0)
         ),
     )
-
-    keystone_service_password_file = get_str("keystone", "service_password_file", None)
-    if not cfg.keystone_service_password and keystone_service_password_file:
-        cfg.keystone_service_password = _read_secret_file(keystone_service_password_file)
 
     if cfg.worker_stale_processing_after_seconds is None:
         h = cfg.worker_hard_timeout_seconds

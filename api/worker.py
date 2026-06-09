@@ -23,7 +23,7 @@ from api.app.notifications import (
 from api.app.config import AppConfig, get_config
 from api.app.db import close_db_engine, get_session_factory
 from api.app.logging import configure_logging
-from api.app.utils.time import as_utc_aware, utc_now
+from api.app.utils.time import as_utc_naive, utc_now_naive
 from api.app.worker.builtin_handlers import register_builtin_handlers
 from api.app.worker.handlers import ActionHandler, HandlerRegistry
 from api.app.worker.retention import run_retention_for_job
@@ -102,7 +102,7 @@ class WorkerRuntime:
         try:
             while not self._stop.is_set():
                 await self._dispatch_once()
-                now = utc_now()
+                now = utc_now_naive()
                 interval = self.cfg.worker_stale_processing_sweep_interval_seconds
                 if (
                     self._last_stale_sweep_at is None
@@ -156,7 +156,7 @@ class WorkerRuntime:
         if slots <= 0:
             return
 
-        now = utc_now()
+        now = utc_now_naive()
         claimed_job_ids = await self._claim_due_jobs_batch(
             supported=supported,
             now=now,
@@ -249,7 +249,7 @@ class WorkerRuntime:
 
     async def _claim_job(self, *, job_id: str, expected_version: int) -> bool:
         _assert_transition(JobStatusModel.QUEUED, JobStatusModel.PROCESSING)
-        now = utc_now()
+        now = utc_now_naive()
         async with self.session_factory() as session:
             stmt = (
                 update(JobModel)
@@ -265,6 +265,7 @@ class WorkerRuntime:
                     worker_id=self.worker_id,
                     started_at=now,
                     updated_at=now,
+                    error_message=None,
                     version=JobModel.version + 1,
                 )
             )
@@ -335,12 +336,20 @@ class WorkerRuntime:
                     )
             if schedule is None:
                 return
+            volume_id: str | None = None
+            if job.action_type == "volume_backup_full":
+                params = schedule.action_parameters
+                if isinstance(params, dict):
+                    raw_volume_id = params.get("volume_id")
+                    if isinstance(raw_volume_id, str) and raw_volume_id.strip():
+                        volume_id = raw_volume_id.strip()
             await run_retention_for_job(
                 action_type=job.action_type,
                 project_id=job.project_id,
                 schedule_id=job.schedule_id,
                 retention_policy_raw=schedule.retention_policy,
                 trigger_status=trigger_status.value,
+                volume_id=volume_id,
                 trust_id=trust_id,
             )
         except Exception as exc:
@@ -373,7 +382,7 @@ class WorkerRuntime:
             .values(
                 status=to_status,
                 version=JobModel.version + 1,
-                updated_at=utc_now(),
+                updated_at=utc_now_naive(),
                 **values,
             )
         )
@@ -407,8 +416,8 @@ class WorkerRuntime:
                     error_message=detail,
                     action_parameters_at_failure=job.action_parameters,
                     extra=extra,
-                    occurred_at=utc_now(),
-                    created_at=utc_now(),
+                    occurred_at=utc_now_naive(),
+                    created_at=utc_now_naive(),
                 )
                 session.add(fault)
                 await session.commit()
@@ -423,7 +432,7 @@ class WorkerRuntime:
         supported = self.registry.supported_action_types()
         if not supported:
             return
-        now = utc_now()
+        now = utc_now_naive()
         after = self.cfg.worker_stale_processing_after_seconds
         cutoff = now - timedelta(seconds=after)
         async with self.session_factory() as session:
@@ -448,7 +457,7 @@ class WorkerRuntime:
         supported = self.registry.supported_action_types()
         if not supported:
             return
-        now = utc_now()
+        now = utc_now_naive()
         cutoff = now - timedelta(seconds=self.cfg.worker_hard_timeout_seconds)
         async with self.session_factory() as session:
             result = await session.execute(
@@ -470,7 +479,7 @@ class WorkerRuntime:
             )
 
     async def _cleanup_expired_jobs_once(self) -> int:
-        now = utc_now()
+        now = utc_now_naive()
         ttl_cutoff = now - timedelta(days=self.cfg.job_cleanup_ttl_days)
         batch_size = 100
         terminal_failures = {
@@ -526,7 +535,7 @@ class WorkerRuntime:
         self, *, job_id: str, expected_version: int, cutoff: datetime
     ) -> None:
         _assert_transition(JobStatusModel.PROCESSING, JobStatusModel.HARD_TIMED_OUT)
-        now = utc_now()
+        now = utc_now_naive()
         async with self.session_factory() as session:
             stmt = (
                 update(JobModel)
@@ -574,7 +583,7 @@ class WorkerRuntime:
     async def _reclaim_one_stale_job(
         self, *, job_id: str, expected_version: int, cutoff: datetime
     ) -> None:
-        now = utc_now()
+        now = utc_now_naive()
         async with self.session_factory() as session:
             job = await self._load_job(session, job_id)
             if not job or job.status != JobStatusModel.PROCESSING:
@@ -583,7 +592,7 @@ class WorkerRuntime:
                 return
             if job.action_type not in self.registry.supported_action_types():
                 return
-            if job.started_at is not None and as_utc_aware(job.started_at) >= cutoff:
+            if job.started_at is not None and as_utc_naive(job.started_at) >= cutoff:
                 return
 
             if job.retry_count >= self.cfg.worker_max_retry:
@@ -696,7 +705,7 @@ class WorkerRuntime:
                 return
 
             outcome, err = await self._execute_with_timeouts(handler, job)
-            now = utc_now()
+            now = utc_now_naive()
 
             if outcome == "done":
                 ok = await self._transition(
@@ -808,7 +817,7 @@ class WorkerRuntime:
         call_hook: bool,
         handler: Optional[ActionHandler] = None,
     ) -> None:
-        now = utc_now()
+        now = utc_now_naive()
         err_text = str(error)
         transitioned = await self._transition(
             session=session,
@@ -874,7 +883,7 @@ class WorkerRuntime:
                 job=job,
                 from_status=failure_status,
                 to_status=JobStatusModel.MAX_RETRIED,
-                values={"ended_at": utc_now()},
+                values={"ended_at": utc_now_naive()},
             )
             if not moved:
                 return
@@ -894,7 +903,7 @@ class WorkerRuntime:
         )
         if self.cfg.worker_backoff_jitter and delay > 0:
             delay = random.uniform(0.0, delay)
-        next_run = utc_now() + timedelta(seconds=delay)
+        next_run = utc_now_naive() + timedelta(seconds=delay)
         ok = await self._transition(
             session=session,
             job=job,
