@@ -29,9 +29,11 @@ class HttpKeystoneClient(KeystoneClient):
         self,
         base_url: str,
         *,
-        service_username: str | None = None,
-        service_password: str | None = None,
-        service_user_domain_name: str = "Default",
+        username: str | None = None,
+        password: str | None = None,
+        user_domain_name: str = "Default",
+        project_name: str | None = None,
+        project_domain_name: str | None = None,
         verify_ssl: bool = True,
         timeout: float = 5.0,
     ) -> None:
@@ -39,9 +41,11 @@ class HttpKeystoneClient(KeystoneClient):
         if normalized.endswith("/v3"):
             normalized = normalized[: -len("/v3")]
         self._base_url = normalized
-        self._service_username = service_username
-        self._service_password = service_password
-        self._service_user_domain_name = service_user_domain_name
+        self._username = username
+        self._password = password
+        self._user_domain_name = user_domain_name
+        self._project_name = project_name
+        self._project_domain_name = project_domain_name
         self._verify_ssl = verify_ssl
         self._timeout = timeout
         self._cached_validation_token: str | None = None
@@ -63,23 +67,29 @@ class HttpKeystoneClient(KeystoneClient):
         return datetime.now(timezone.utc) < self._cached_validation_token_expires_at
 
     async def _request_service_token_with_password(self) -> tuple[str, datetime]:
-        if not self._service_username or not self._service_password:
-            raise ValueError("service username/password are not configured")
+        if not self._username or not self._password:
+            raise ValueError("Keystone username/password are not configured")
         url = f"{self._base_url}/v3/auth/tokens"
-        payload = {
-            "auth": {
-                "identity": {
-                    "methods": ["password"],
-                    "password": {
-                        "user": {
-                            "name": self._service_username,
-                            "domain": {"name": self._service_user_domain_name},
-                            "password": self._service_password,
-                        }
-                    },
-                }
+        auth: dict = {
+            "identity": {
+                "methods": ["password"],
+                "password": {
+                    "user": {
+                        "name": self._username,
+                        "domain": {"name": self._user_domain_name},
+                        "password": self._password,
+                    }
+                },
             }
         }
+        if self._project_name and self._project_domain_name:
+            auth["scope"] = {
+                "project": {
+                    "name": self._project_name,
+                    "domain": {"name": self._project_domain_name},
+                }
+            }
+        payload = {"auth": auth}
         try:
             async with httpx.AsyncClient(verify=self._verify_ssl, timeout=self._timeout) as client:
                 resp = await client.post(url, json=payload)
@@ -104,9 +114,9 @@ class HttpKeystoneClient(KeystoneClient):
             if self._cached_token_is_valid():
                 return self._cached_validation_token or ""
 
-            if not self._service_username or not self._service_password:
+            if not self._username or not self._password:
                 raise ValueError(
-                    "Keystone service token requires service_username and service_password."
+                    "Keystone service token requires username and password."
                 )
             token, expires_at = await self._request_service_token_with_password()
             self._cached_validation_token = token

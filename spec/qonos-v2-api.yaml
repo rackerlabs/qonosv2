@@ -762,7 +762,7 @@ components:
       name: action_type
       in: path
       required: true
-      description: Action type identifier (e.g. server_snapshot, backup)
+      description: Action type identifier (e.g. server_snapshot, volume_backup_full)
       schema:
         type: string
         maxLength: 100
@@ -807,6 +807,7 @@ components:
           type: string
           enum:
             - server_snapshot
+            - volume_backup_full
           description: |
             Must be one of the registered action types from /actions. Validation must check against
             the /actions registry at runtime.
@@ -823,12 +824,26 @@ components:
             Structured JSON validated against the action_parameters_schema for the specified action_type.
             The schema is available via GET /actions/{action_type}. Server-side validation ensures that
             the parameters conform to the schema.
-            
-            For action_type: server_snapshot, the field server_id is required.
-            Example: {"server_id": "123e4567-e89b-12d3-a456-426614174000"}
+
+            server_snapshot: required server_id (UUID). Optional image_name_prefix (string).
+            Glance image name is {prefix}-{server_name}-{timestamp} (default prefix
+            qonos-server_snapshot; server_name from Nova or server_id; UTC YYYYMMDDHHMMSS; max 255 chars).
+
+            volume_backup_full: required volume_id (UUID). Optional backup_name_prefix, description,
+            container (strings). Backup name is {prefix}-{volume_name}-{timestamp} (default prefix
+            qonos-volume_backup_full). In-use volumes are backed up with force.
           additionalProperties: true
-          example:
-            server_id: "123e4567-e89b-12d3-a456-426614174000"
+          examples:
+            server_snapshot:
+              summary: server_snapshot parameters
+              value:
+                server_id: "123e4567-e89b-12d3-a456-426614174000"
+                image_name_prefix: qonos-snapshot
+            volume_backup_full:
+              summary: volume_backup_full parameters
+              value:
+                volume_id: "223e4567-e89b-12d3-a456-426614174001"
+                backup_name_prefix: qonos-backup
         webhook_url:
           type: string
           format: uri
@@ -836,10 +851,14 @@ components:
           description: Optional per-schedule webhook endpoint for job lifecycle notifications.
         retention_policy:
           $ref: '#/components/schemas/RetentionPolicy'
+          description: |
+            Optional. Count: {"type": "count", "value": N}. Age: {"type": "age", "max_age_days": N}.
         execution_profile_id:
           type: string
           format: uuid
-          description: Execution profile UUID used for delegated execution.
+          description: |
+            Execution profile UUID used for delegated OpenStack trust execution.
+            Required when creating schedules with action_type server_snapshot or volume_backup_full.
         enabled:
           type: boolean
         next_run_at:
@@ -863,22 +882,51 @@ components:
 
     RetentionPolicy:
       type: object
+      additionalProperties: false
+      required:
+        - type
       description: |
-        First-class retention policy with count and age options. At least one of count or
-        age_seconds must be specified. If both are provided, retention applies to items that
-        meet either condition.
+        Optional per-schedule retention policy. Validated server-side (see properties for
+        required fields per type).
+
+        Retention runs after terminal job outcomes (DONE, HARD_TIMED_OUT, MAX_RETRIED) and
+        only affects qonos_managed resources for the schedule.
+
+        - type count: require value; max_age_days must be omitted. Keeps the newest value artifacts.
+        - type age: require max_age_days; value must be omitted. Deletes artifacts older than max_age_days.
+
+        - server_snapshot: Glance images
+        - volume_backup_full: full Cinder backups
+
+        value or max_age_days of 0 disables that dimension.
       properties:
+        type:
+          type: string
+          enum: [count, age]
+          description: Retention mode.
+        value:
+          type: integer
+          minimum: 0
+          description: |
+            Required when type is count. Maximum number of artifacts to retain.
+            Must not be set when type is age.
+        max_age_days:
+          type: integer
+          minimum: 0
+          description: |
+            Required when type is age. Delete artifacts older than this many days.
+            Must not be set when type is count.
+      examples:
         count:
-          type: integer
-          minimum: 1
-          description: Maximum number of items to retain.
-        age_seconds:
-          type: integer
-          minimum: 1
-          description: Maximum age in seconds to retain.
-      anyOf:
-        - required: [count]
-        - required: [age_seconds]
+          summary: Keep newest 5 artifacts
+          value:
+            type: count
+            value: 5
+        age:
+          summary: Delete artifacts older than 7 days
+          value:
+            type: age
+            max_age_days: 7
 
     ScheduleCreate:
       type: object
@@ -902,6 +950,7 @@ components:
           type: string
           enum:
             - server_snapshot
+            - volume_backup_full
           maxLength: 100
           description: Must be a registered action type from /actions.
         cron_expression:
@@ -915,11 +964,22 @@ components:
             Must conform to the action_parameters_schema for the specified action_type
             (available via GET /actions/{action_type}). Server-side validation enforced.
 
-            For action_type: server_snapshot, the field server_id is required.
-            Example: {"server_id": "123e4567-e89b-12d3-a456-426614174000"}
+            server_snapshot: required server_id (UUID). Optional image_name_prefix. Image name
+            {prefix}-{server_name}-{timestamp} (default prefix qonos-server_snapshot).
+
+            volume_backup_full: required volume_id (UUID). Optional backup_name_prefix,
+            description, container. Backup name {prefix}-{volume_name}-{timestamp}.
           additionalProperties: true
-          example:
-            server_id: "123e4567-e89b-12d3-a456-426614174000"
+          examples:
+            server_snapshot:
+              summary: server_snapshot parameters
+              value:
+                server_id: "123e4567-e89b-12d3-a456-426614174000"
+                image_name_prefix: qonos-snapshot
+            volume_backup_full:
+              summary: volume_backup_full parameters
+              value:
+                volume_id: "223e4567-e89b-12d3-a456-426614174001"
         webhook_url:
           type: string
           format: uri
@@ -927,10 +987,14 @@ components:
           description: Optional per-schedule webhook endpoint for job lifecycle notifications.
         retention_policy:
           $ref: '#/components/schemas/RetentionPolicy'
+          description: |
+            Optional. Count: {"type": "count", "value": N}. Age: {"type": "age", "max_age_days": N}.
         execution_profile_id:
           type: string
           format: uuid
-          description: Execution profile UUID used for delegated execution.
+          description: |
+            Execution profile UUID used for delegated OpenStack trust execution.
+            Required for action_type server_snapshot or volume_backup_full.
         enabled:
           type: boolean
           default: true
@@ -957,11 +1021,22 @@ components:
             Must conform to the action_parameters_schema for the specified action_type
             (available via GET /actions/{action_type}). Server-side validation enforced.
 
-            For action_type: server_snapshot, the field server_id is required.
-            Example: {"server_id": "123e4567-e89b-12d3-a456-426614174000"}
+            server_snapshot: required server_id (UUID). Optional image_name_prefix. Image name
+            {prefix}-{server_name}-{timestamp} (default prefix qonos-server_snapshot).
+
+            volume_backup_full: required volume_id (UUID). Optional backup_name_prefix,
+            description, container. Backup name {prefix}-{volume_name}-{timestamp}.
           additionalProperties: true
-          example:
-            server_id: "123e4567-e89b-12d3-a456-426614174000"
+          examples:
+            server_snapshot:
+              summary: server_snapshot parameters
+              value:
+                server_id: "123e4567-e89b-12d3-a456-426614174000"
+                image_name_prefix: qonos-snapshot
+            volume_backup_full:
+              summary: volume_backup_full parameters
+              value:
+                volume_id: "223e4567-e89b-12d3-a456-426614174001"
         webhook_url:
           type: string
           format: uri
@@ -969,10 +1044,12 @@ components:
           description: Optional per-schedule webhook endpoint for job lifecycle notifications.
         retention_policy:
           $ref: '#/components/schemas/RetentionPolicy'
+          description: |
+            Optional. Count: {"type": "count", "value": N}. Age: {"type": "age", "max_age_days": N}.
         execution_profile_id:
           type: string
           format: uuid
-          description: Execution profile UUID used for delegated execution.
+          description: Execution profile UUID used for delegated OpenStack trust execution.
         enabled:
           type: boolean
 
@@ -1172,6 +1249,7 @@ components:
           type: string
           enum:
             - server_snapshot
+            - volume_backup_full
           maxLength: 100
           description: Inherited from the schedule. Must be a registered action type from /actions.
         action_parameters:
@@ -1179,6 +1257,10 @@ components:
           description: |
             Inherited from the schedule. Must conform to the action_parameters_schema for this action_type
             (available via GET /actions/{action_type}). Server-side validation enforced.
+
+            server_snapshot jobs snapshot server_id to a Glance image named
+            {prefix}-{server_name}-{timestamp}.
+            volume_backup_full jobs create a full Cinder backup of volume_id.
           additionalProperties: true
         created_at:
           type: string
@@ -1372,7 +1454,7 @@ components:
         action_type:
           type: string
           maxLength: 100
-          description: Identifier used in schedules/jobs (e.g. server_snapshot, backup).
+          description: Identifier used in schedules/jobs (e.g. server_snapshot, volume_backup_full).
         name:
           type: string
           minLength: 1
@@ -1388,18 +1470,42 @@ components:
             JSON Schema that defines the structure and validation rules for action_parameters
             when using the specified action_type. Clients must provide action_parameters that conform
             to this schema. Server-side validation enforces compliance.
-            
-            For action_type: server_snapshot, the schema requires server_id (UUID of the server/instance to snapshot).
-            Example schema: {"type": "object", "required": ["server_id"], "properties": {"server_id": {"type": "string", "format": "uuid"}}}
+
+            server_snapshot: required server_id (Nova instance UUID). Optional image_name_prefix.
+            Image naming: {prefix}-{server_name}-{timestamp} (default prefix qonos-server_snapshot).
+
+            volume_backup_full: required volume_id (Cinder volume UUID). Optional
+            backup_name_prefix, description, container. Backup naming:
+            {prefix}-{volume_name}-{timestamp} (default prefix qonos-volume_backup_full).
+            Aligns with the action_types registry seed.
           additionalProperties: true
-          example:
-            type: object
-            required: [server_id]
-            properties:
-              server_id:
-                type: string
-                format: uuid
-                description: UUID of the server/instance to snapshot
+          examples:
+            server_snapshot:
+              summary: server_snapshot JSON Schema
+              value:
+                type: object
+                required: [server_id]
+                properties:
+                  server_id:
+                    type: string
+                  image_name_prefix:
+                    type: string
+                additionalProperties: true
+            volume_backup_full:
+              summary: volume_backup_full JSON Schema
+              value:
+                type: object
+                required: [volume_id]
+                properties:
+                  volume_id:
+                    type: string
+                  backup_name_prefix:
+                    type: string
+                  description:
+                    type: string
+                  container:
+                    type: string
+                additionalProperties: true
 
     ActionList:
       type: object

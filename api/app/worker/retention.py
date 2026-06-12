@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from api.app.openstack_connection import build_openstack_connection
 from api.app.utils.time import as_utc_aware, utc_now
 
 logger = logging.getLogger("qonos.worker.retention")
 
+CINDER_API_TIMEOUT_SECONDS = 60.0
 _SKIP_IMAGE_STATUSES = {"DELETED", "PENDING_DELETE"}
+_SKIP_BACKUP_STATUSES = frozenset({"creating", "deleting", "deleted"})
 
 
 @dataclass
@@ -136,6 +140,156 @@ def _apply_server_snapshot_retention(
     }
 
 
+def _is_incremental_backup(backup: Any) -> bool:
+    value = getattr(backup, "is_incremental", False)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return bool(value)
+
+
+def _backup_status(backup: Any) -> str:
+    return str(getattr(backup, "status", "") or "").lower()
+
+
+def _cinder_call_with_timeout(
+    pool: ThreadPoolExecutor,
+    fn: Callable[[], Any],
+    *,
+    timeout: float,
+    operation: str,
+    subject_id: str,
+) -> Any | None:
+    future = pool.submit(fn)
+    try:
+        return future.result(timeout=timeout)
+    except FuturesTimeoutError:
+        logger.warning(
+            "retention %s timed out subject_id=%s timeout=%.0fs",
+            operation,
+            subject_id,
+            timeout,
+        )
+        return None
+    except Exception as exc:
+        logger.warning(
+            "retention %s failed subject_id=%s error=%s",
+            operation,
+            subject_id,
+            exc,
+        )
+        return None
+
+
+def _list_volume_backups(
+    pool: ThreadPoolExecutor, conn: Any, volume_id: str
+) -> list[Any]:
+    backups = _cinder_call_with_timeout(
+        pool,
+        lambda: list(conn.block_storage.backups(details=True, volume_id=volume_id)),
+        timeout=CINDER_API_TIMEOUT_SECONDS,
+        operation="backups_list",
+        subject_id=volume_id,
+    )
+    return backups or []
+
+
+def _empty_volume_retention_stats() -> dict[str, int]:
+    return {
+        "scanned": 0,
+        "eligible": 0,
+        "delete_candidates": 0,
+        "deleted": 0,
+        "delete_failed": 0,
+    }
+
+
+def _delete_backup(conn: Any, backup_id: str) -> bool:
+    try:
+        conn.block_storage.delete_backup(backup_id, ignore_missing=True)
+        return True
+    except TypeError:
+        try:
+            conn.block_storage.delete_backup(backup_id)
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def _apply_volume_backup_full_retention(
+    *,
+    project_id: str,
+    schedule_id: str,
+    action_type: str,
+    policy: RetentionPolicy,
+    now: datetime,
+    volume_id: str | None = None,
+    trust_id: str | None = None,
+) -> dict[str, int]:
+    if not volume_id:
+        logger.warning(
+            "retention skipped decision=missing_volume_id schedule_id=%s",
+            schedule_id,
+        )
+        return _empty_volume_retention_stats()
+
+    conn = _build_connection(project_id=project_id, trust_id=trust_id)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="retention-cinder") as pool:
+        backups = _list_volume_backups(pool, conn, volume_id)
+
+    candidates: list[tuple[str, datetime]] = []
+    for backup in backups:
+        backup_project = str(getattr(backup, "project_id", "") or "")
+        if backup_project and backup_project != project_id:
+            continue
+        if _is_incremental_backup(backup):
+            continue
+        meta = getattr(backup, "metadata", None) or {}
+        if not isinstance(meta, dict):
+            continue
+        if str(meta.get("qonos_managed", "")).lower() != "true":
+            continue
+        if meta.get("qonos_action_type") != action_type:
+            continue
+        if meta.get("qonos_schedule_id") != schedule_id:
+            continue
+        if _backup_status(backup) in _SKIP_BACKUP_STATUSES:
+            continue
+        created_at = _parse_created_at(getattr(backup, "created_at", None))
+        if created_at is None:
+            continue
+        candidates.append((str(getattr(backup, "id")), created_at))
+
+    ids_to_delete: set[str] = set()
+    if policy.count is not None and policy.count > 0:
+        newest_first = sorted(candidates, key=lambda x: x[1], reverse=True)
+        for backup_id, _ in newest_first[policy.count :]:
+            ids_to_delete.add(backup_id)
+
+    if policy.max_age_days is not None and policy.max_age_days > 0:
+        cutoff = now - timedelta(days=policy.max_age_days)
+        for backup_id, created_at in candidates:
+            if created_at < cutoff:
+                ids_to_delete.add(backup_id)
+
+    deleted = 0
+    failed = 0
+    for backup_id in sorted(ids_to_delete):
+        if _delete_backup(conn, backup_id):
+            deleted += 1
+        else:
+            failed += 1
+
+    return {
+        "scanned": len(backups),
+        "eligible": len(candidates),
+        "delete_candidates": len(ids_to_delete),
+        "deleted": deleted,
+        "delete_failed": failed,
+    }
+
+
 async def run_retention_for_job(
     *,
     action_type: str,
@@ -143,6 +297,7 @@ async def run_retention_for_job(
     schedule_id: str,
     retention_policy_raw: Any,
     trigger_status: str,
+    volume_id: str | None = None,
     trust_id: str | None = None,
 ) -> None:
     policy = parse_retention_policy(retention_policy_raw)
@@ -159,6 +314,17 @@ async def run_retention_for_job(
                 action_type=action_type,
                 policy=policy,
                 now=now,
+                trust_id=trust_id,
+            )
+        elif action_type == "volume_backup_full":
+            stats = await asyncio.to_thread(
+                _apply_volume_backup_full_retention,
+                project_id=project_id,
+                schedule_id=schedule_id,
+                action_type=action_type,
+                policy=policy,
+                now=now,
+                volume_id=volume_id,
                 trust_id=trust_id,
             )
         else:

@@ -69,9 +69,9 @@ def _job(server_id: str) -> SimpleNamespace:
 def _cfg(**kwargs):
     defaults = dict(
         keystone_url="http://keystone:5000/v3",
-        keystone_service_username="qonos",
-        keystone_service_password="qonos-pass",
-        keystone_service_user_domain_name="Default",
+        keystone_username="qonos",
+        keystone_password="qonos-pass",
+        keystone_user_domain_name="Default",
         keystone_verify_ssl=False,
         server_snapshot_poll_interval_seconds=0.01,
         server_snapshot_poll_timeout_seconds=0.2,
