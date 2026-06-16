@@ -337,7 +337,7 @@ class WorkerRuntime:
             if schedule is None:
                 return
             volume_id: str | None = None
-            if job.action_type == "volume_backup_full":
+            if job.action_type in ("volume_backup_full", "volume_backup_incremental"):
                 params = schedule.action_parameters
                 if isinstance(params, dict):
                     raw_volume_id = params.get("volume_id")

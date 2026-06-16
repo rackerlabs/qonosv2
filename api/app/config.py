@@ -52,8 +52,8 @@ class AppConfig:
     job_cleanup_interval_seconds: float = 3600.0
     server_snapshot_poll_interval_seconds: float = 5.0
     server_snapshot_poll_timeout_seconds: float = 600.0
-    volume_backup_full_poll_interval_seconds: float = 5.0
-    volume_backup_full_poll_timeout_seconds: float = 3600.0
+    volume_backup_poll_interval_seconds: float = 5.0
+    volume_backup_poll_timeout_seconds: float = 3600.0
 
     worker_id: str = "auto"
     amqp_url: Optional[str] = None
@@ -154,11 +154,11 @@ def get_config() -> AppConfig:
         server_snapshot_poll_timeout_seconds=max(
             0.1, get_float("worker", "server_snapshot_poll_timeout_seconds", 600.0)
         ),
-        volume_backup_full_poll_interval_seconds=max(
-            0.1, get_float("worker", "volume_backup_full_poll_interval_seconds", 5.0)
+        volume_backup_poll_interval_seconds=max(
+            0.1, get_float("worker", "volume_backup_poll_interval_seconds", 5.0)
         ),
-        volume_backup_full_poll_timeout_seconds=max(
-            0.1, get_float("worker", "volume_backup_full_poll_timeout_seconds", 3600.0)
+        volume_backup_poll_timeout_seconds=max(
+            0.1, get_float("worker", "volume_backup_poll_timeout_seconds", 3600.0)
         ),
         amqp_url=get_str("amqp", "url", None),
         job_queue_exchange=(get_str("amqp", "job_exchange", "qonos.jobs") or "qonos.jobs"),

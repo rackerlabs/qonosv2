@@ -217,33 +217,65 @@ def _delete_backup(conn: Any, backup_id: str) -> bool:
         return False
 
 
-def _apply_volume_backup_full_retention(
+def _backup_parent_id(backup: Any) -> str | None:
+    for attr in ("parent_id", "parentId"):
+        value = getattr(backup, attr, None)
+        if value:
+            return str(value)
+    return None
+
+
+def _build_children_by_parent(backups: list[Any]) -> dict[str, list[str]]:
+    children: dict[str, list[str]] = {}
+    for backup in backups:
+        backup_id = str(getattr(backup, "id", "") or "")
+        if not backup_id:
+            continue
+        parent_id = _backup_parent_id(backup)
+        if parent_id:
+            children.setdefault(parent_id, []).append(backup_id)
+    return children
+
+
+def _cascade_delete_order(
+    root_ids: set[str], children_by_parent: dict[str, list[str]]
+) -> list[str]:
+    order: list[str] = []
+    seen: set[str] = set()
+
+    def add_subtree(backup_id: str) -> None:
+        for child_id in sorted(children_by_parent.get(backup_id, [])):
+            if child_id in seen:
+                continue
+            add_subtree(child_id)
+            order.append(child_id)
+            seen.add(child_id)
+
+    for root_id in sorted(root_ids):
+        add_subtree(root_id)
+        if root_id not in seen:
+            order.append(root_id)
+            seen.add(root_id)
+    return order
+
+
+def _volume_backup_candidates(
+    backups: list[Any],
     *,
     project_id: str,
     schedule_id: str,
     action_type: str,
-    policy: RetentionPolicy,
-    now: datetime,
-    volume_id: str | None = None,
-    trust_id: str | None = None,
-) -> dict[str, int]:
-    if not volume_id:
-        logger.warning(
-            "retention skipped decision=missing_volume_id schedule_id=%s",
-            schedule_id,
-        )
-        return _empty_volume_retention_stats()
-
-    conn = _build_connection(project_id=project_id, trust_id=trust_id)
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="retention-cinder") as pool:
-        backups = _list_volume_backups(pool, conn, volume_id)
-
+    incremental_only: bool,
+) -> list[tuple[str, datetime]]:
     candidates: list[tuple[str, datetime]] = []
     for backup in backups:
         backup_project = str(getattr(backup, "project_id", "") or "")
         if backup_project and backup_project != project_id:
             continue
-        if _is_incremental_backup(backup):
+        is_incremental = _is_incremental_backup(backup)
+        if incremental_only and not is_incremental:
+            continue
+        if not incremental_only and is_incremental:
             continue
         meta = getattr(backup, "metadata", None) or {}
         if not isinstance(meta, dict):
@@ -260,6 +292,39 @@ def _apply_volume_backup_full_retention(
         if created_at is None:
             continue
         candidates.append((str(getattr(backup, "id")), created_at))
+    return candidates
+
+
+def _apply_volume_backup_retention(
+    *,
+    project_id: str,
+    schedule_id: str,
+    action_type: str,
+    policy: RetentionPolicy,
+    now: datetime,
+    volume_id: str | None = None,
+    trust_id: str | None = None,
+    incremental_only: bool,
+    cascade_on_full_delete: bool = False,
+) -> dict[str, int]:
+    if not volume_id:
+        logger.warning(
+            "retention skipped decision=missing_volume_id schedule_id=%s",
+            schedule_id,
+        )
+        return _empty_volume_retention_stats()
+
+    conn = _build_connection(project_id=project_id, trust_id=trust_id)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="retention-cinder") as pool:
+        backups = _list_volume_backups(pool, conn, volume_id)
+
+    candidates = _volume_backup_candidates(
+        backups,
+        project_id=project_id,
+        schedule_id=schedule_id,
+        action_type=action_type,
+        incremental_only=incremental_only,
+    )
 
     ids_to_delete: set[str] = set()
     if policy.count is not None and policy.count > 0:
@@ -273,9 +338,15 @@ def _apply_volume_backup_full_retention(
             if created_at < cutoff:
                 ids_to_delete.add(backup_id)
 
+    if cascade_on_full_delete and ids_to_delete:
+        children_by_parent = _build_children_by_parent(backups)
+        delete_sequence = _cascade_delete_order(ids_to_delete, children_by_parent)
+    else:
+        delete_sequence = sorted(ids_to_delete)
+
     deleted = 0
     failed = 0
-    for backup_id in sorted(ids_to_delete):
+    for backup_id in delete_sequence:
         if _delete_backup(conn, backup_id):
             deleted += 1
         else:
@@ -284,10 +355,56 @@ def _apply_volume_backup_full_retention(
     return {
         "scanned": len(backups),
         "eligible": len(candidates),
-        "delete_candidates": len(ids_to_delete),
+        "delete_candidates": len(delete_sequence),
         "deleted": deleted,
         "delete_failed": failed,
     }
+
+
+def _apply_volume_backup_full_retention(
+    *,
+    project_id: str,
+    schedule_id: str,
+    action_type: str,
+    policy: RetentionPolicy,
+    now: datetime,
+    volume_id: str | None = None,
+    trust_id: str | None = None,
+) -> dict[str, int]:
+    return _apply_volume_backup_retention(
+        project_id=project_id,
+        schedule_id=schedule_id,
+        action_type=action_type,
+        policy=policy,
+        now=now,
+        volume_id=volume_id,
+        trust_id=trust_id,
+        incremental_only=False,
+        cascade_on_full_delete=True,
+    )
+
+
+def _apply_volume_backup_incremental_retention(
+    *,
+    project_id: str,
+    schedule_id: str,
+    action_type: str,
+    policy: RetentionPolicy,
+    now: datetime,
+    volume_id: str | None = None,
+    trust_id: str | None = None,
+) -> dict[str, int]:
+    return _apply_volume_backup_retention(
+        project_id=project_id,
+        schedule_id=schedule_id,
+        action_type=action_type,
+        policy=policy,
+        now=now,
+        volume_id=volume_id,
+        trust_id=trust_id,
+        incremental_only=True,
+        cascade_on_full_delete=False,
+    )
 
 
 async def run_retention_for_job(
@@ -319,6 +436,17 @@ async def run_retention_for_job(
         elif action_type == "volume_backup_full":
             stats = await asyncio.to_thread(
                 _apply_volume_backup_full_retention,
+                project_id=project_id,
+                schedule_id=schedule_id,
+                action_type=action_type,
+                policy=policy,
+                now=now,
+                volume_id=volume_id,
+                trust_id=trust_id,
+            )
+        elif action_type == "volume_backup_incremental":
+            stats = await asyncio.to_thread(
+                _apply_volume_backup_incremental_retention,
                 project_id=project_id,
                 schedule_id=schedule_id,
                 action_type=action_type,

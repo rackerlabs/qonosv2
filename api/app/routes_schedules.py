@@ -359,7 +359,11 @@ async def update_schedule(
         if (
             "execution_profile_id" not in update_data
             and not schedule.execution_profile_id
-            and schedule.action_type in ("server_snapshot", "volume_backup_full")
+            and schedule.action_type in (
+                "server_snapshot",
+                "volume_backup_full",
+                "volume_backup_incremental",
+            )
         ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
