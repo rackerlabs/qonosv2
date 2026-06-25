@@ -222,6 +222,11 @@ def _backup_parent_id(backup: Any) -> str | None:
         value = getattr(backup, attr, None)
         if value:
             return str(value)
+    meta = getattr(backup, "metadata", None) or {}
+    if isinstance(meta, dict):
+        value = meta.get("qonos_parent_full_backup_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     return None
 
 

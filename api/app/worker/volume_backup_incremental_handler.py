@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from db.src.models import Job as JobModel
 
+from . import volume_backup_common as _vbc
 from .volume_backup_common import (
     CinderVolumeBackupHandler,
+    backup_status,
     find_most_recent_full_backup,
+    is_incremental_backup,
 )
 
 logger = logging.getLogger("qonos.worker.volume_backup_incremental")
@@ -24,6 +28,7 @@ class VolumeBackupIncrementalActionHandler(CinderVolumeBackupHandler):
         )
 
     def _execute_sync(self, job: JobModel) -> Any:
+        cfg = _vbc.get_config()
         params = job.action_parameters or {}
         default_prefix = f"qonos-{job.action_type}"
         prefix = str(params.get("backup_name_prefix") or default_prefix).strip()
@@ -31,7 +36,26 @@ class VolumeBackupIncrementalActionHandler(CinderVolumeBackupHandler):
         container = params.get("container")
 
         def create_backup(pool, conn, volume_id: str) -> tuple[str, str, dict[str, Any] | None]:
-            volume_backups = self._list_backups(pool, conn, volume_id)
+            wait_deadline = time.monotonic() + cfg.volume_backup_coordination_wait_timeout_seconds
+            while True:
+                volume_backups = self._list_backups(pool, conn, volume_id)
+                full_in_progress = any(
+                    (not is_incremental_backup(b)) and backup_status(b) == "creating"
+                    for b in volume_backups
+                )
+                if not full_in_progress:
+                    break
+                if time.monotonic() >= wait_deadline:
+                    raise RuntimeError(
+                        "Full backup currently in progress for volume "
+                        f"{volume_id}; timed out waiting and will retry later"
+                    )
+                logger.info(
+                    "volume backup coordination decision=wait_for_full volume_id=%s",
+                    volume_id,
+                )
+                time.sleep(cfg.volume_backup_poll_interval_seconds)
+
             parent_full = find_most_recent_full_backup(volume_backups)
             if parent_full is None:
                 raise ValueError(

@@ -304,3 +304,41 @@ async def test_volume_backup_full_retention_cascade_deletes_dependent_incrementa
     )
 
     assert backup_api.deleted == ["inc-grandchild", "inc-child", "full-old"]
+
+
+@pytest.mark.anyio
+async def test_volume_backup_full_retention_cascade_uses_metadata_parent_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = utc_now()
+    inc = _bkp(
+        backup_id="inc-meta",
+        created_at=now - timedelta(days=9),
+        action_type="volume_backup_incremental",
+        schedule_id="sched-inc",
+        incremental=True,
+    )
+    inc.metadata["qonos_parent_full_backup_id"] = "full-old"
+    inc.parent_id = None
+    backups = [
+        _bkp(backup_id="full-old", created_at=now - timedelta(days=10)),
+        _bkp(backup_id="full-keep", created_at=now - timedelta(days=5)),
+        inc,
+    ]
+    backup_api = _FakeBackupAPI(backups)
+    monkeypatch.setattr(
+        retention,
+        "_build_connection",
+        lambda project_id, trust_id=None: _FakeConn(backup_api=backup_api),
+    )
+
+    await retention.run_retention_for_job(
+        action_type="volume_backup_full",
+        project_id="proj-1",
+        schedule_id="sched-1",
+        retention_policy_raw={"type": "count", "value": 1},
+        trigger_status="DONE",
+        volume_id="vol-1",
+    )
+
+    assert backup_api.deleted == ["inc-meta", "full-old"]

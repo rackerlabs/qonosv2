@@ -116,6 +116,7 @@ def _cfg(**kwargs):
     defaults = dict(
         volume_backup_poll_interval_seconds=0.01,
         volume_backup_poll_timeout_seconds=0.2,
+        volume_backup_coordination_wait_timeout_seconds=0.2,
     )
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -287,4 +288,58 @@ async def test_volume_backup_incremental_ignores_incremental_when_finding_full_b
     )
 
     with pytest.raises(ValueError, match="No successful full backup found"):
+        await handler.execute(_job(str(uuid4())))
+
+
+@pytest.mark.anyio
+async def test_volume_backup_incremental_waits_for_full_backup_to_finish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = VolumeBackupIncrementalActionHandler()
+    now = datetime.now(timezone.utc)
+    block = _FakeBlockStorage(
+        backup_statuses=["creating", "available", "available"],
+        existing_backups=[_full_backup(backup_id="full-base", created_at=now)],
+    )
+    conn = _FakeConn(block)
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_common.get_config",
+        lambda: _cfg(volume_backup_coordination_wait_timeout_seconds=0.3),
+    )
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_common.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
+
+    result = await handler.execute(_job(str(uuid4())))
+
+    assert result["status"] == "available"
+    assert result["parent_full_backup_id"] == "full-base"
+    assert block.created_attrs is not None
+
+
+@pytest.mark.anyio
+async def test_volume_backup_incremental_times_out_waiting_for_full_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = VolumeBackupIncrementalActionHandler()
+    now = datetime.now(timezone.utc)
+    block = _FakeBlockStorage(
+        backup_statuses=["creating"],
+        existing_backups=[_full_backup(backup_id="full-base", created_at=now)],
+    )
+    conn = _FakeConn(block)
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_common.get_config",
+        lambda: _cfg(
+            volume_backup_poll_interval_seconds=0.01,
+            volume_backup_coordination_wait_timeout_seconds=0.03,
+        ),
+    )
+    monkeypatch.setattr(
+        "api.app.worker.volume_backup_common.build_openstack_connection",
+        lambda project_id, trust_id=None: conn,
+    )
+
+    with pytest.raises(RuntimeError, match="Full backup currently in progress"):
         await handler.execute(_job(str(uuid4())))

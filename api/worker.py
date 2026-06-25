@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI
 from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from uvicorn import Config as UvicornConfig, Server as UvicornServer
 
@@ -386,7 +387,19 @@ class WorkerRuntime:
                 **values,
             )
         )
-        res = await session.execute(stmt)
+        try:
+            res = await session.execute(stmt)
+        except OperationalError as exc:
+            if "1020" in str(exc):
+                await session.rollback()
+                logger.info(
+                    "job transition decision=concurrent_update job_id=%s from=%s to=%s",
+                    job.id,
+                    from_status.value,
+                    to_status.value,
+                )
+                return False
+            raise
         if res.rowcount != 1:
             await session.rollback()
             return False
