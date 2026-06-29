@@ -323,6 +323,8 @@ def build_test_config(db_url: str) -> AppConfig:
         job_cleanup_enabled=False,
         server_snapshot_poll_interval_seconds=0.01,
         server_snapshot_poll_timeout_seconds=1.0,
+        volume_backup_poll_interval_seconds=0.01,
+        volume_backup_poll_timeout_seconds=1.0,
         worker_id="integration-test-worker",
         amqp_url=None,
     )

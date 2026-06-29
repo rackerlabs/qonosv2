@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,11 @@ from .db_errors import raise_for_db_error
 from .db import get_db_session
 from .error_constants import ErrorMessages
 from .schemas import Schedule, ScheduleCreate, ScheduleList, ScheduleUpdate
+from .volume_schedule_advisories import (
+    extract_volume_id_from_params,
+    volume_schedule_advisories,
+    volume_schedule_advisories_for_volume,
+)
 from db.src.models import (
     ActionType as ActionTypeModel,
     ExecutionProfile as ExecutionProfileModel,
@@ -26,6 +32,7 @@ from db.src.models import (
 )
 
 router = APIRouter(prefix="/v2", tags=["schedules"])
+logger = logging.getLogger("qonos.api.schedules")
 
 
 async def _validate_trust_for_project(*, project_id: str, trust_id: Optional[str]) -> None:
@@ -178,6 +185,26 @@ def _normalize_retention_policy_for_storage(
     return payload.retention_policy.model_dump(exclude_none=True)
 
 
+def _emit_schedule_advisories(
+    response: Response | None,
+    *,
+    project_id: str,
+    schedule_id: str | None,
+    advisories: list[str],
+) -> None:
+    if not advisories:
+        return
+    if response is not None:
+        response.headers["X-Qonos-Advisory"] = " | ".join(advisories)
+    for advisory in advisories:
+        logger.warning(
+            "schedule advisory project_id=%s schedule_id=%s advisory=%s",
+            project_id,
+            schedule_id or "",
+            advisory,
+        )
+
+
 @router.get(
     "/schedules",
     response_model=ScheduleList,
@@ -229,6 +256,7 @@ async def list_schedules(
 )
 async def create_schedule(
     payload: ScheduleCreate,
+    response: Response,
     auth: AuthContext = Depends(require_policy("schedule:create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> Schedule:
@@ -283,6 +311,20 @@ async def create_schedule(
         raise_for_db_error(e)
     await session.refresh(schedule_row)
 
+    advisories = await volume_schedule_advisories(
+        session=session,
+        project_id=auth.project_id,
+        action_type=payload.action_type,
+        action_parameters=payload.action_parameters,
+        cron_expression=payload.cron_expression,
+    )
+    _emit_schedule_advisories(
+        response,
+        project_id=auth.project_id,
+        schedule_id=schedule_row.id,
+        advisories=advisories,
+    )
+
     return Schedule.model_validate(schedule_row)
 
 
@@ -319,11 +361,32 @@ def ensure_schedule_access_allowed(schedule: ScheduleModel, auth: AuthContext) -
 )
 async def show_schedule(
     schedule_id: str = Path(..., description="Schedule ID"),
+    response: Response = None,
     auth: AuthContext = Depends(require_policy("schedule:read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> Schedule:
     schedule = await get_schedule_or_404(schedule_id, session)
     ensure_schedule_access_allowed(schedule, auth)
+
+    if schedule.action_type in {"volume_backup_full", "volume_backup_incremental"}:
+        effective_action_parameters = (
+            schedule.action_parameters if isinstance(schedule.action_parameters, dict) else {}
+        )
+        advisories = await volume_schedule_advisories(
+            session=session,
+            project_id=schedule.project_id,
+            action_type=schedule.action_type,
+            action_parameters=effective_action_parameters,
+            cron_expression=schedule.cron_expression,
+            exclude_schedule_id=schedule.id,
+        )
+        _emit_schedule_advisories(
+            response,
+            project_id=schedule.project_id,
+            schedule_id=schedule.id,
+            advisories=advisories,
+        )
+
     return Schedule.model_validate(schedule)
 
 
@@ -335,6 +398,7 @@ async def update_schedule(
     schedule_id: str = Path(..., description="Schedule ID"),
     request: Request = None,
     payload: ScheduleUpdate | None = None,
+    response: Response = None,
     auth: AuthContext = Depends(require_policy("schedule:update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> Schedule:
@@ -359,7 +423,11 @@ async def update_schedule(
         if (
             "execution_profile_id" not in update_data
             and not schedule.execution_profile_id
-            and schedule.action_type in ("server_snapshot", "volume_backup_full")
+            and schedule.action_type in (
+                "server_snapshot",
+                "volume_backup_full",
+                "volume_backup_incremental",
+            )
         ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -424,6 +492,24 @@ async def update_schedule(
             await session.rollback()
             raise_for_db_error(e)
         await session.refresh(schedule)
+
+        effective_action_parameters = (
+            schedule.action_parameters if isinstance(schedule.action_parameters, dict) else {}
+        )
+        advisories = await volume_schedule_advisories(
+            session=session,
+            project_id=schedule.project_id,
+            action_type=schedule.action_type,
+            action_parameters=effective_action_parameters,
+            cron_expression=schedule.cron_expression,
+            exclude_schedule_id=schedule.id,
+        )
+        _emit_schedule_advisories(
+            response,
+            project_id=schedule.project_id,
+            schedule_id=schedule.id,
+            advisories=advisories,
+        )
 
     return Schedule.model_validate(schedule)
 
@@ -490,11 +576,17 @@ async def disable_schedule(
 )
 async def delete_schedule(
     schedule_id: str = Path(..., description="Schedule ID"),
+    response: Response = None,
     auth: AuthContext = Depends(require_policy("schedule:delete")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     schedule = await get_schedule_or_404(schedule_id, session)
     ensure_schedule_access_allowed(schedule, auth)
+
+    deleted_volume_id: str | None = None
+    if schedule.action_type == "volume_backup_full":
+        params = schedule.action_parameters if isinstance(schedule.action_parameters, dict) else {}
+        deleted_volume_id = extract_volume_id_from_params(schedule.action_type, params)
 
     schedule.deleted_at = utc_now()
     session.add(schedule)
@@ -503,3 +595,16 @@ async def delete_schedule(
     except (IntegrityError, OperationalError) as e:
         await session.rollback()
         raise_for_db_error(e)
+
+    if deleted_volume_id:
+        advisories = await volume_schedule_advisories_for_volume(
+            session=session,
+            project_id=schedule.project_id,
+            volume_id=deleted_volume_id,
+        )
+        _emit_schedule_advisories(
+            response,
+            project_id=schedule.project_id,
+            schedule_id=schedule_id,
+            advisories=advisories,
+        )

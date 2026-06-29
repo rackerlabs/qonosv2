@@ -19,6 +19,7 @@ from .routes_execution_profiles import router as execution_profiles_router
 from .routes_health import router as health_router
 from .routes_jobs import router as jobs_router
 from .routes_schedules import router as schedules_router
+from .routes_volumes import router as volumes_router
 from .db import close_db_engine
 
 
@@ -50,6 +51,7 @@ def create_app(*, keystone_client: KeystoneClient | None = None) -> FastAPI:
     app.include_router(schedules_router)
     app.include_router(execution_profiles_router)
     app.include_router(jobs_router)
+    app.include_router(volumes_router)
     app.include_router(actions_router)
     app.include_router(health_router)
 

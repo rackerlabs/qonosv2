@@ -160,3 +160,22 @@ VALUES (
   ),
   TRUE
 );
+
+INSERT IGNORE INTO action_types (action_type, name, description, action_parameters_schema, enabled)
+VALUES (
+  'volume_backup_incremental',
+  'Volume incremental backup',
+  'Create an incremental Cinder backup of a block storage volume',
+  JSON_OBJECT(
+    'type','object',
+    'properties', JSON_OBJECT(
+      'volume_id', JSON_OBJECT('type','string'),
+      'backup_name_prefix', JSON_OBJECT('type','string'),
+      'description', JSON_OBJECT('type','string'),
+      'container', JSON_OBJECT('type','string')
+    ),
+    'required', JSON_ARRAY('volume_id'),
+    'additionalProperties', true
+  ),
+  TRUE
+);

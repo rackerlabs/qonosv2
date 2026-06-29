@@ -92,8 +92,8 @@ def _job(volume_id: str, *, volume_status: str = "available") -> SimpleNamespace
 
 def _cfg(**kwargs):
     defaults = dict(
-        volume_backup_full_poll_interval_seconds=0.01,
-        volume_backup_full_poll_timeout_seconds=0.2,
+        volume_backup_poll_interval_seconds=0.01,
+        volume_backup_poll_timeout_seconds=0.2,
     )
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -105,10 +105,10 @@ async def test_volume_backup_full_success(monkeypatch: pytest.MonkeyPatch) -> No
     block = _FakeBlockStorage(volume_exists=True, backup_statuses=["creating", "available"])
     conn = _FakeConn(block)
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
     )
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
     )
     job = _job(str(uuid4()))
@@ -131,10 +131,10 @@ async def test_volume_backup_full_in_use_uses_force(monkeypatch: pytest.MonkeyPa
     block = _FakeBlockStorage(volume_status="in-use", backup_statuses=["available"])
     conn = _FakeConn(block)
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
     )
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
     )
 
@@ -149,10 +149,10 @@ async def test_volume_backup_full_volume_not_found(monkeypatch: pytest.MonkeyPat
     handler = VolumeBackupFullActionHandler()
     conn = _FakeConn(_FakeBlockStorage(volume_exists=False))
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
     )
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
     )
 
@@ -167,10 +167,10 @@ async def test_volume_backup_full_creation_failure(monkeypatch: pytest.MonkeyPat
         _FakeBlockStorage(volume_exists=True, create_error=RuntimeError("boom"))
     )
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
     )
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
     )
 
@@ -183,14 +183,14 @@ async def test_volume_backup_full_polling_timeout(monkeypatch: pytest.MonkeyPatc
     handler = VolumeBackupFullActionHandler()
     conn = _FakeConn(_FakeBlockStorage(backup_statuses=["creating"]))
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.get_config",
+        "api.app.worker.volume_backup_common.get_config",
         lambda: _cfg(
-            volume_backup_full_poll_interval_seconds=0.01,
-            volume_backup_full_poll_timeout_seconds=0.05,
+            volume_backup_poll_interval_seconds=0.01,
+            volume_backup_poll_timeout_seconds=0.05,
         ),
     )
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
     )
 
@@ -215,14 +215,14 @@ async def test_volume_backup_full_create_backup_timeout(
     block.create_backup = _hang  # type: ignore[method-assign]
     conn = _FakeConn(block)
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
     )
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.CREATE_BACKUP_TIMEOUT_SECONDS",
+        "api.app.worker.volume_backup_common.CREATE_BACKUP_TIMEOUT_SECONDS",
         0.05,
     )
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
     )
 
@@ -246,10 +246,10 @@ async def test_volume_backup_full_reuses_existing_job_backup(
     )
     conn = _FakeConn(block)
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
     )
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
     )
 
@@ -279,10 +279,10 @@ async def test_volume_backup_full_reuses_existing_backup_when_volume_is_backing_
     )
     conn = _FakeConn(block)
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
     )
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
     )
 
@@ -301,10 +301,10 @@ async def test_volume_backup_full_rejects_backing_up_volume_without_existing_bac
     block = _FakeBlockStorage(volume_status="backing-up")
     conn = _FakeConn(block)
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
     )
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
     )
 
@@ -321,10 +321,10 @@ async def test_volume_backup_full_falls_back_to_list_when_get_backup_fails(
     block.get_backup = lambda backup_id: None  # type: ignore[method-assign]
     conn = _FakeConn(block)
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.get_config", lambda: _cfg()
+        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
     )
     monkeypatch.setattr(
-        "api.app.worker.volume_backup_full_handler.build_openstack_connection",
+        "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
     )
 

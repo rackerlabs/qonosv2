@@ -280,3 +280,24 @@ class Action(BaseModel):
 class ActionList(BaseModel):
     actions: List[Action]
     links: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class VolumeBackupChainItem(BaseModel):
+    id: str
+    name: Optional[str] = None
+    status: str
+    is_incremental: bool
+    parent_id: Optional[str] = None
+    size: Optional[int] = None
+    created_at: Optional[datetime] = None
+    project_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class VolumeBackupChain(BaseModel):
+    volume_id: str
+    project_id: str
+    has_full_schedule: bool
+    has_incremental_schedule: bool
+    advisories: List[str] = Field(default_factory=list)
+    backups: List[VolumeBackupChainItem] = Field(default_factory=list)
