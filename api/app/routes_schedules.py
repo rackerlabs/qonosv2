@@ -48,10 +48,7 @@ async def _validate_trust_for_project(*, project_id: str, trust_id: Optional[str
     if not cfg.keystone_username or not cfg.keystone_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "trust_id requires username/password credentials "
-                "for delegated execution."
-            ),
+            detail=("trust_id requires username/password credentials " "for delegated execution."),
         )
     client = HttpKeystoneClient(
         base_url=cfg.keystone_url,
@@ -423,7 +420,8 @@ async def update_schedule(
         if (
             "execution_profile_id" not in update_data
             and not schedule.execution_profile_id
-            and schedule.action_type in (
+            and schedule.action_type
+            in (
                 "server_snapshot",
                 "volume_backup_full",
                 "volume_backup_incremental",

@@ -9,12 +9,12 @@ from uuid import uuid4
 from api.app.auth.context import AuthContext
 from api.app.auth.keystone_client import KeystoneClient
 
-
 PROJECT_A = "11111111-1111-4111-8111-111111111111"
 PROJECT_B = "22222222-2222-4222-8222-222222222222"
 TRUST_A = "33333333-3333-4333-8333-333333333333"
 TRUST_B = "55555555-5555-4555-8555-555555555555"
 SERVER_A = "44444444-4444-4444-8444-444444444444"
+VOLUME_A = "66666666-6666-4666-8666-666666666666"
 
 TOKEN_MEMBER_A = "token-member-project-a"
 TOKEN_MEMBER_B = "token-member-project-b"
@@ -89,22 +89,54 @@ class SimulatedServer:
     project_id: str
 
 
+@dataclass
+class SimulatedVolume:
+    id: str
+    name: str
+    project_id: str
+    status: str = "available"
+
+
+@dataclass
+class SimulatedBackup:
+    id: str
+    name: str
+    project_id: str
+    volume_id: str
+    status: str
+    created_at: datetime
+    is_incremental: bool
+    parent_id: str | None = None
+    size: int | None = 10
+    metadata: Dict[str, str] = field(default_factory=dict)
+
+
 class OpenStackSimulator:
     def __init__(self) -> None:
         self.servers: Dict[str, SimulatedServer] = {}
         self.images: Dict[str, SimulatedImage] = {}
+        self.volumes: Dict[str, SimulatedVolume] = {}
+        self.backups: Dict[str, SimulatedBackup] = {}
         self._poll_counts: Dict[str, int] = {}
         self.snapshot_statuses: List[str] = ["QUEUED", "ACTIVE"]
+        self.backup_statuses: List[str] = ["creating", "available"]
         self.create_snapshot_failures_remaining: int = 0
+        self.create_backup_failures_remaining: int = 0
         self.deleted_image_ids: List[str] = []
+        self.deleted_backup_ids: List[str] = []
         self.connection_calls: List[tuple[str, str | None]] = []
 
     def reset(self) -> None:
         self.servers.clear()
         self.images.clear()
+        self.volumes.clear()
+        self.backups.clear()
         self.snapshot_statuses = ["QUEUED", "ACTIVE"]
+        self.backup_statuses = ["creating", "available"]
         self.create_snapshot_failures_remaining = 0
+        self.create_backup_failures_remaining = 0
         self.deleted_image_ids.clear()
+        self.deleted_backup_ids.clear()
         self.connection_calls.clear()
         self._poll_counts = {}
 
@@ -118,6 +150,23 @@ class OpenStackSimulator:
         server = SimulatedServer(id=server_id, name=name, project_id=project_id)
         self.servers[server_id] = server
         return server
+
+    def add_volume(
+        self,
+        *,
+        volume_id: str = VOLUME_A,
+        name: str = "vol-test",
+        project_id: str = PROJECT_A,
+        status: str = "available",
+    ) -> SimulatedVolume:
+        vol = SimulatedVolume(
+            id=volume_id,
+            name=name,
+            project_id=project_id,
+            status=status,
+        )
+        self.volumes[volume_id] = vol
+        return vol
 
     def seed_managed_images(
         self,
@@ -247,6 +296,111 @@ class _SimulatedConnection:
     ) -> None:
         self.compute = _SimulatedCompute(simulator, project_id)
         self.image = _SimulatedImageAPI(simulator, project_id)
+        self.block_storage = _SimulatedBlockStorage(simulator, project_id)
 
     def __getattr__(self, name: str) -> Any:
         raise AttributeError(name)
+
+
+class _SimulatedBlockStorage:
+    def __init__(self, simulator: OpenStackSimulator, project_id: str) -> None:
+        self._sim = simulator
+        self._project_id = project_id
+
+    def get_volume(self, volume_id: str):
+        vol = self._sim.volumes.get(volume_id)
+        if vol is None or vol.project_id != self._project_id:
+            return None
+        return SimpleNamespace(id=vol.id, name=vol.name, status=vol.status)
+
+    def create_backup(self, **attrs):
+        if self._sim.create_backup_failures_remaining > 0:
+            self._sim.create_backup_failures_remaining -= 1
+            raise RuntimeError("simulated backup creation failure")
+
+        volume_id = str(attrs.get("volume_id") or "")
+        vol = self._sim.volumes.get(volume_id)
+        if vol is None or vol.project_id != self._project_id:
+            raise RuntimeError(f"volume not found: {volume_id}")
+
+        backup_id = str(uuid4())
+        is_incremental = bool(attrs.get("is_incremental", False))
+        metadata = attrs.get("metadata") if isinstance(attrs.get("metadata"), dict) else {}
+        parent_id = None
+        if is_incremental:
+            raw_parent = metadata.get("qonos_parent_full_backup_id")
+            if isinstance(raw_parent, str) and raw_parent.strip():
+                parent_id = raw_parent.strip()
+
+        b = SimulatedBackup(
+            id=backup_id,
+            name=str(attrs.get("name") or backup_id),
+            project_id=self._project_id,
+            volume_id=volume_id,
+            status=self._sim.backup_statuses[0],
+            created_at=datetime.now(timezone.utc),
+            is_incremental=is_incremental,
+            parent_id=parent_id,
+            size=int(attrs.get("size") or 10) if attrs.get("size") is not None else 10,
+            metadata={str(k): str(v) for k, v in (metadata or {}).items()},
+        )
+        self._sim.backups[backup_id] = b
+        return backup_id
+
+    def get_backup(self, backup_id: str):
+        b = self._sim.backups.get(backup_id)
+        if b is None or b.project_id != self._project_id:
+            return None
+        poll_idx = self._sim._poll_counts.get(backup_id, 0)
+        self._sim._poll_counts[backup_id] = poll_idx + 1
+        status = self._sim.backup_statuses[min(poll_idx, len(self._sim.backup_statuses) - 1)]
+        b.status = status
+        return SimpleNamespace(
+            id=b.id,
+            name=b.name,
+            status=b.status,
+            created_at=b.created_at,
+            is_incremental=b.is_incremental,
+            parent_id=b.parent_id,
+            project_id=b.project_id,
+            volume_id=b.volume_id,
+            size=b.size,
+            metadata=b.metadata,
+        )
+
+    def backups(self, *, details: bool = True, volume_id: str | None = None):
+        _ = details
+        out: list[Any] = []
+        for b in self._sim.backups.values():
+            if b.project_id != self._project_id:
+                continue
+            if volume_id and b.volume_id != volume_id:
+                continue
+            out.append(
+                SimpleNamespace(
+                    id=b.id,
+                    name=b.name,
+                    status=b.status,
+                    created_at=b.created_at,
+                    is_incremental=b.is_incremental,
+                    parent_id=b.parent_id,
+                    project_id=b.project_id,
+                    volume_id=b.volume_id,
+                    size=b.size,
+                    metadata=b.metadata,
+                )
+            )
+        return out
+
+    def delete_backup(self, backup_id: str, ignore_missing: bool = True):
+        b = self._sim.backups.get(backup_id)
+        if b is None:
+            if not ignore_missing:
+                raise RuntimeError(f"backup not found: {backup_id}")
+            return
+        if b.project_id != self._project_id:
+            if not ignore_missing:
+                raise RuntimeError(f"backup does not belong to project: {backup_id}")
+            return
+        del self._sim.backups[backup_id]
+        self._sim.deleted_backup_ids.append(backup_id)

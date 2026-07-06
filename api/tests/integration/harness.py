@@ -27,8 +27,8 @@ from .fakes import (
     TOKEN_MEMBER_B,
     TOKEN_SERVICE,
     TRUST_A,
+    VOLUME_A,
 )
-
 
 TERMINAL_JOB_STATUSES = {
     JobStatusModel.DONE,
@@ -188,6 +188,77 @@ class IntegrationHarness:
             execution_profile_id=execution_profile_id,
             cron_expression=cron_expression,
             server_id=server_id,
+            retention_policy=retention_policy,
+            name=name,
+            token=token,
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()
+
+    def volume_schedule_body(
+        self,
+        *,
+        execution_profile_id: str,
+        action_type: str,
+        volume_id: str = VOLUME_A,
+        cron_expression: str = "* * * * *",
+        retention_policy: Optional[Dict[str, Any]] = None,
+        name: str | None = None,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "name": name or f"{action_type}-{uuid4()}",
+            "description": "integration test volume backup schedule",
+            "action_type": action_type,
+            "cron_expression": cron_expression,
+            "action_parameters": {"volume_id": volume_id},
+            "execution_profile_id": execution_profile_id,
+            "enabled": True,
+        }
+        if retention_policy is not None:
+            body["retention_policy"] = retention_policy
+        return body
+
+    async def post_volume_schedule(
+        self,
+        *,
+        execution_profile_id: str,
+        action_type: str,
+        volume_id: str = VOLUME_A,
+        cron_expression: str = "* * * * *",
+        retention_policy: Optional[Dict[str, Any]] = None,
+        name: str | None = None,
+        token: str | None = None,
+    ) -> httpx.Response:
+        return await self.request(
+            "POST",
+            "/v2/schedules",
+            token=token,
+            json=self.volume_schedule_body(
+                execution_profile_id=execution_profile_id,
+                action_type=action_type,
+                volume_id=volume_id,
+                cron_expression=cron_expression,
+                retention_policy=retention_policy,
+                name=name,
+            ),
+        )
+
+    async def create_volume_schedule(
+        self,
+        *,
+        execution_profile_id: str,
+        action_type: str,
+        volume_id: str = VOLUME_A,
+        cron_expression: str = "* * * * *",
+        retention_policy: Optional[Dict[str, Any]] = None,
+        name: str | None = None,
+        token: str | None = None,
+    ) -> Dict[str, Any]:
+        resp = await self.post_volume_schedule(
+            execution_profile_id=execution_profile_id,
+            action_type=action_type,
+            volume_id=volume_id,
+            cron_expression=cron_expression,
             retention_policy=retention_policy,
             name=name,
             token=token,

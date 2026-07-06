@@ -25,9 +25,7 @@ class VolumeBackupFullActionHandler(CinderVolumeBackupHandler):
 
         def create_backup(pool, conn, volume_id: str) -> tuple[str, str, dict[str, Any] | None]:
             volume, force = self._validate_volume_for_create(pool, conn, volume_id)
-            backup_name = self._new_backup_name(
-                prefix=prefix, volume=volume, volume_id=volume_id
-            )
+            backup_name = self._new_backup_name(prefix=prefix, volume=volume, volume_id=volume_id)
             create_attrs: dict[str, Any] = {
                 "volume_id": volume_id,
                 "name": backup_name,

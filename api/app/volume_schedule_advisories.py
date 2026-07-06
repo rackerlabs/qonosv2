@@ -31,9 +31,7 @@ def advisories_from_flags(*, has_full: bool, has_incremental: bool) -> list[str]
             "recommended pattern is weekly full + daily incremental."
         )
     if has_incremental and not has_full:
-        advisories.append(
-            "Incremental schedule exists without a full schedule for this volume."
-        )
+        advisories.append("Incremental schedule exists without a full schedule for this volume.")
     return advisories
 
 

@@ -1,4 +1,4 @@
-"""End-to-end integration tests: schedule -> job -> snapshot -> retention."""
+"""End-to-end integration tests: schedule -> job -> worker actions -> retention."""
 
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ from .fakes import (
     TOKEN_SERVICE,
     TRUST_A,
     TRUST_B,
+    VOLUME_A,
 )
 from .harness import IntegrationHarness
-
 
 pytestmark = pytest.mark.integration
 
@@ -416,3 +416,122 @@ async def test_service_token_cannot_create_schedule(harness: IntegrationHarness)
         token=TOKEN_SERVICE,
     )
     assert resp.status_code == 403
+
+
+async def test_e2e_full_backup_then_incremental_backup(harness: IntegrationHarness) -> None:
+    profile = await harness.create_execution_profile()
+
+    full = await harness.create_volume_schedule(
+        execution_profile_id=profile["id"],
+        action_type="volume_backup_full",
+        name=f"e2e-vol-full-{uuid4()}",
+    )
+    inc = await harness.create_volume_schedule(
+        execution_profile_id=profile["id"],
+        action_type="volume_backup_incremental",
+        name=f"e2e-vol-inc-{uuid4()}",
+    )
+
+    full_job = await harness.run_full_cycle(full)
+    assert full_job.status == JobStatusModel.DONE
+
+    inc_job = await harness.run_full_cycle(inc)
+    assert inc_job.status == JobStatusModel.DONE
+
+    backups = [
+        b
+        for b in harness.openstack.backups.values()
+        if b.project_id == PROJECT_A and b.volume_id == VOLUME_A
+    ]
+    assert len(backups) >= 2
+    full_backups = [b for b in backups if not b.is_incremental and b.status == "available"]
+    inc_backups = [b for b in backups if b.is_incremental and b.status == "available"]
+    assert full_backups
+    assert inc_backups
+    assert inc_backups[-1].parent_id == full_backups[-1].id
+
+
+async def test_e2e_incremental_without_full_errors(harness: IntegrationHarness) -> None:
+    harness.worker.cfg.worker_max_retry = 0
+    profile = await harness.create_execution_profile()
+    inc = await harness.create_volume_schedule(
+        execution_profile_id=profile["id"],
+        action_type="volume_backup_incremental",
+        name=f"e2e-vol-inc-nofull-{uuid4()}",
+    )
+
+    job = await harness.run_full_cycle(inc, expect_done=False)
+    assert job.status == JobStatusModel.MAX_RETRIED
+    assert "No successful full backup found" in (job.error_message or "")
+
+
+async def test_e2e_backup_chain_query_returns_ordered_chain(harness: IntegrationHarness) -> None:
+    profile = await harness.create_execution_profile()
+    full = await harness.create_volume_schedule(
+        execution_profile_id=profile["id"],
+        action_type="volume_backup_full",
+        name=f"e2e-chain-full-{uuid4()}",
+    )
+    inc = await harness.create_volume_schedule(
+        execution_profile_id=profile["id"],
+        action_type="volume_backup_incremental",
+        name=f"e2e-chain-inc-{uuid4()}",
+    )
+    await harness.run_full_cycle(full)
+    await harness.run_full_cycle(inc)
+
+    resp = await harness.assert_status(
+        "GET",
+        f"/v2/volumes/{VOLUME_A}/backup-chain?project_id={PROJECT_A}",
+        200,
+        token=TOKEN_ADMIN_A,
+    )
+    body = resp.json()
+    assert body["volume_id"] == VOLUME_A
+    assert body["project_id"] == PROJECT_A
+    assert body["has_full_schedule"] is True
+    assert body["has_incremental_schedule"] is True
+    assert len(body["backups"]) >= 2
+    created = [b.get("created_at") for b in body["backups"]]
+    assert created == sorted(created)
+    inc_items = [b for b in body["backups"] if b["is_incremental"]]
+    full_items = [b for b in body["backups"] if not b["is_incremental"]]
+    assert inc_items and full_items
+    assert inc_items[-1]["parent_id"] == full_items[-1]["id"]
+
+
+async def test_e2e_cascade_retention_deletes_incrementals_with_full(
+    harness: IntegrationHarness,
+) -> None:
+    profile = await harness.create_execution_profile()
+    full = await harness.create_volume_schedule(
+        execution_profile_id=profile["id"],
+        action_type="volume_backup_full",
+        retention_policy={"type": "count", "value": 1},
+        name=f"e2e-ret-full-{uuid4()}",
+    )
+    inc = await harness.create_volume_schedule(
+        execution_profile_id=profile["id"],
+        action_type="volume_backup_incremental",
+        retention_policy={"type": "count", "value": 10},
+        name=f"e2e-ret-inc-{uuid4()}",
+    )
+
+    await harness.run_full_cycle(full)
+    await harness.run_full_cycle(inc)
+    backups_after_chain1 = list(harness.openstack.backups.values())
+    assert any(not b.is_incremental for b in backups_after_chain1)
+    assert any(b.is_incremental for b in backups_after_chain1)
+
+    await harness.run_full_cycle(full)
+
+    remaining = [
+        b
+        for b in harness.openstack.backups.values()
+        if b.project_id == PROJECT_A and b.volume_id == VOLUME_A and b.status == "available"
+    ]
+    full_remaining = [b for b in remaining if not b.is_incremental]
+    assert len(full_remaining) == 1
+    for b in remaining:
+        if b.is_incremental:
+            assert b.parent_id == full_remaining[0].id
