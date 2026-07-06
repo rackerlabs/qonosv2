@@ -115,9 +115,7 @@ class HttpKeystoneClient(KeystoneClient):
                 return self._cached_validation_token or ""
 
             if not self._username or not self._password:
-                raise ValueError(
-                    "Keystone service token requires username and password."
-                )
+                raise ValueError("Keystone service token requires username and password.")
             token, expires_at = await self._request_service_token_with_password()
             self._cached_validation_token = token
             self._cached_validation_token_expires_at = expires_at - timedelta(seconds=30)

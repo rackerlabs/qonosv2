@@ -166,9 +166,7 @@ class CinderVolumeBackupHandler(ActionHandler):
             )
             return None
 
-    def _list_backups(
-        self, pool: ThreadPoolExecutor, conn: Any, volume_id: str
-    ) -> list[Any]:
+    def _list_backups(self, pool: ThreadPoolExecutor, conn: Any, volume_id: str) -> list[Any]:
         backups = self._call_with_timeout(
             pool,
             lambda: list(conn.block_storage.backups(details=True, volume_id=volume_id)),
@@ -250,9 +248,7 @@ class CinderVolumeBackupHandler(ActionHandler):
 
         volume_status = str(getattr(volume, "status", "") or "").lower()
         if volume_status not in ALLOWED_VOLUME_STATUSES:
-            raise ValueError(
-                f"Volume not available for backup: {volume_id} status={volume_status}"
-            )
+            raise ValueError(f"Volume not available for backup: {volume_id} status={volume_status}")
         return volume, volume_status == "in-use"
 
     def _new_backup_name(self, *, prefix: str, volume: Any, volume_id: str) -> str:

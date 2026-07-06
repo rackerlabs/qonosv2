@@ -17,17 +17,17 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api.app import routes_execution_profiles, routes_schedules
+from api.app import routes_execution_profiles, routes_schedules, routes_volumes
 from api.app.config import get_config
 from api.app.db import close_db_engine
 from api.app.main import create_app
 from api.app.worker import retention
 from api.app.worker import server_snapshot_handler
+from api.app.worker import volume_backup_common
 from db.src.models import ActionType as ActionTypeModel, Base
 
-from .fakes import OpenStackSimulator, SimulatedKeystoneClient, SERVER_A
+from .fakes import OpenStackSimulator, SimulatedKeystoneClient, SERVER_A, VOLUME_A
 from .harness import IntegrationHarness, build_test_config, build_worker_runtime
-
 
 _DEFAULT_MARIADB_URL = "mysql+aiomysql://root:root@127.0.0.1:3306/qonosv2_test"
 
@@ -83,22 +83,52 @@ async def _clear_integration_data(session_factory: sessionmaker) -> None:
 
 async def _seed_action_types(session: AsyncSession) -> None:
     existing = await session.get(ActionTypeModel, "server_snapshot")
-    if existing is not None:
-        return
-    session.add(
-        ActionTypeModel(
-            action_type="server_snapshot",
-            name="Server snapshot",
-            description="Integration test action",
-            action_parameters_schema={
-                "type": "object",
-                "properties": {"server_id": {"type": "string"}},
-                "required": ["server_id"],
-                "additionalProperties": True,
-            },
-            enabled=True,
+    if existing is None:
+        session.add(
+            ActionTypeModel(
+                action_type="server_snapshot",
+                name="Server snapshot",
+                description="Integration test action",
+                action_parameters_schema={
+                    "type": "object",
+                    "properties": {"server_id": {"type": "string"}},
+                    "required": ["server_id"],
+                    "additionalProperties": True,
+                },
+                enabled=True,
+            )
         )
-    )
+
+    if await session.get(ActionTypeModel, "volume_backup_full") is None:
+        session.add(
+            ActionTypeModel(
+                action_type="volume_backup_full",
+                name="Volume backup (full)",
+                description="Integration test action",
+                action_parameters_schema={
+                    "type": "object",
+                    "properties": {"volume_id": {"type": "string"}},
+                    "required": ["volume_id"],
+                    "additionalProperties": True,
+                },
+                enabled=True,
+            )
+        )
+    if await session.get(ActionTypeModel, "volume_backup_incremental") is None:
+        session.add(
+            ActionTypeModel(
+                action_type="volume_backup_incremental",
+                name="Volume backup (incremental)",
+                description="Integration test action",
+                action_parameters_schema={
+                    "type": "object",
+                    "properties": {"volume_id": {"type": "string"}},
+                    "required": ["volume_id"],
+                    "additionalProperties": True,
+                },
+                enabled=True,
+            )
+        )
     await session.commit()
 
 
@@ -126,12 +156,15 @@ async def integration_env(
     monkeypatch.setattr(routes_execution_profiles, "_validate_trust_for_project", validate_trust)
     openstack = OpenStackSimulator()
     openstack.add_server(server_id=SERVER_A)
+    openstack.add_volume(volume_id=VOLUME_A)
 
     def _fake_connection(*, project_id: str, trust_id: str | None = None):
         return openstack.connection_for(project_id=project_id, trust_id=trust_id)
 
     monkeypatch.setattr(server_snapshot_handler, "build_openstack_connection", _fake_connection)
     monkeypatch.setattr(retention, "_build_connection", _fake_connection)
+    monkeypatch.setattr(volume_backup_common, "build_openstack_connection", _fake_connection)
+    monkeypatch.setattr(routes_volumes, "build_openstack_connection", _fake_connection)
 
     engine = create_async_engine(db_url)
     session_factory = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
@@ -178,6 +211,7 @@ def harness(integration_env: dict[str, Any]) -> IntegrationHarness:
     keystone.trust_validation_calls.clear()
     h.openstack.reset()
     h.openstack.add_server(server_id=SERVER_A)
+    h.openstack.add_volume(volume_id=VOLUME_A)
     return h
 
 

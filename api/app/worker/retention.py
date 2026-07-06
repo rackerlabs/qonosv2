@@ -180,9 +180,7 @@ def _cinder_call_with_timeout(
         return None
 
 
-def _list_volume_backups(
-    pool: ThreadPoolExecutor, conn: Any, volume_id: str
-) -> list[Any]:
+def _list_volume_backups(pool: ThreadPoolExecutor, conn: Any, volume_id: str) -> list[Any]:
     backups = _cinder_call_with_timeout(
         pool,
         lambda: list(conn.block_storage.backups(details=True, volume_id=volume_id)),

@@ -114,9 +114,7 @@ def get_config() -> AppConfig:
         keystone_verify_ssl=get_bool("keystone", "verify_ssl", True),
         keystone_username=get_str("keystone", "username", None),
         keystone_password=get_str("keystone", "password", None),
-        keystone_user_domain_name=(
-            get_str("keystone", "user_domain_name", "Default") or "Default"
-        ),
+        keystone_user_domain_name=(get_str("keystone", "user_domain_name", "Default") or "Default"),
         keystone_project_name=get_str("keystone", "project_name", None),
         keystone_project_domain_name=get_str("keystone", "project_domain_name", None),
         endpoint_type=get_str("openstack", "endpoint_type", None),

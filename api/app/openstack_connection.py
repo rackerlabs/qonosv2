@@ -44,9 +44,7 @@ def build_openstack_connection(*, project_id: str, trust_id: str | None = None):
 
     if effective_trust_id:
         if not cfg.keystone_username or not cfg.keystone_password:
-            raise RuntimeError(
-                "Trust-based delegation requires username and password."
-            )
+            raise RuntimeError("Trust-based delegation requires username and password.")
         return os_connection.Connection(
             auth_type="password",
             auth={
@@ -60,9 +58,7 @@ def build_openstack_connection(*, project_id: str, trust_id: str | None = None):
         )
 
     if not cfg.keystone_username or not cfg.keystone_password:
-        raise RuntimeError(
-            "Missing Keystone password auth credentials: username/password"
-        )
+        raise RuntimeError("Missing Keystone password auth credentials: username/password")
     return os_connection.Connection(
         auth_type="password",
         auth={

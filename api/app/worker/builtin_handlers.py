@@ -9,9 +9,7 @@ from .volume_backup_incremental_handler import VolumeBackupIncrementalActionHand
 
 def register_builtin_handlers(registry: HandlerRegistry) -> None:
     register_handler(registry, action_type="server_snapshot")(ServerSnapshotActionHandler)
-    register_handler(registry, action_type="volume_backup_full")(
-        VolumeBackupFullActionHandler
-    )
+    register_handler(registry, action_type="volume_backup_full")(VolumeBackupFullActionHandler)
     register_handler(registry, action_type="volume_backup_incremental")(
         VolumeBackupIncrementalActionHandler
     )

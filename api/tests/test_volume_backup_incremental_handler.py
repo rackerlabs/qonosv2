@@ -57,9 +57,7 @@ class _FakeBlockStorage:
         backup = self._backups.get(backup_id)
         if backup is None:
             return None
-        status = self._backup_statuses[
-            min(self._poll_idx, len(self._backup_statuses) - 1)
-        ]
+        status = self._backup_statuses[min(self._poll_idx, len(self._backup_statuses) - 1)]
         backup.status = status
         self._poll_idx += 1
         return backup
@@ -70,9 +68,7 @@ class _FakeBlockStorage:
 
     def backups(self, details: bool = True, volume_id: str | None = None, **kwargs):
         for backup in self._backups.values():
-            status = self._backup_statuses[
-                min(self._poll_idx, len(self._backup_statuses) - 1)
-            ]
+            status = self._backup_statuses[min(self._poll_idx, len(self._backup_statuses) - 1)]
             backup.status = status
         self._poll_idx += 1
         return list(self._backups.values())
@@ -136,9 +132,7 @@ async def test_volume_backup_incremental_success_with_full_backup(
         ],
     )
     conn = _FakeConn(block)
-    monkeypatch.setattr(
-        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
-    )
+    monkeypatch.setattr("api.app.worker.volume_backup_common.get_config", lambda: _cfg())
     monkeypatch.setattr(
         "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
@@ -163,9 +157,7 @@ async def test_volume_backup_incremental_fails_without_full_backup(
     handler = VolumeBackupIncrementalActionHandler()
     block = _FakeBlockStorage(existing_backups=[])
     conn = _FakeConn(block)
-    monkeypatch.setattr(
-        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
-    )
+    monkeypatch.setattr("api.app.worker.volume_backup_common.get_config", lambda: _cfg())
     monkeypatch.setattr(
         "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
@@ -202,9 +194,7 @@ async def test_volume_backup_incremental_reuses_existing_job_backup(
         ],
     )
     conn = _FakeConn(block)
-    monkeypatch.setattr(
-        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
-    )
+    monkeypatch.setattr("api.app.worker.volume_backup_common.get_config", lambda: _cfg())
     monkeypatch.setattr(
         "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
@@ -243,9 +233,7 @@ async def test_volume_backup_incremental_reuses_existing_when_volume_is_backing_
         ],
     )
     conn = _FakeConn(block)
-    monkeypatch.setattr(
-        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
-    )
+    monkeypatch.setattr("api.app.worker.volume_backup_common.get_config", lambda: _cfg())
     monkeypatch.setattr(
         "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
@@ -279,9 +267,7 @@ async def test_volume_backup_incremental_ignores_incremental_when_finding_full_b
         ],
     )
     conn = _FakeConn(block)
-    monkeypatch.setattr(
-        "api.app.worker.volume_backup_common.get_config", lambda: _cfg()
-    )
+    monkeypatch.setattr("api.app.worker.volume_backup_common.get_config", lambda: _cfg())
     monkeypatch.setattr(
         "api.app.worker.volume_backup_common.build_openstack_connection",
         lambda project_id, trust_id=None: conn,
