@@ -32,6 +32,11 @@ def raise_for_db_error(exc: Exception) -> None:
                     status_code=status.HTTP_409_CONFLICT,
                     detail=ErrorMessages.SCHEDULE_NAME_CONFLICT,
                 )
+            if "execution_profiles_project_active_name_uniq" in msg:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=ErrorMessages.EXECUTION_PROFILE_NAME_CONFLICT,
+                )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=ErrorMessages.CONFLICT,
@@ -56,6 +61,11 @@ def raise_for_db_error(exc: Exception) -> None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=ErrorMessages.SCHEDULE_NAME_CONFLICT,
+                )
+            if "execution_profiles_project_active_name_uniq" in msg:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=ErrorMessages.EXECUTION_PROFILE_NAME_CONFLICT,
                 )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

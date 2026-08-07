@@ -53,7 +53,7 @@ class ExecutionProfile(Base):
     description: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
     auth_type: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="trust")
     trust_id: Mapped[Optional[str]] = mapped_column(sa.CHAR(36), nullable=True)
-    created_by_user_id: Mapped[Optional[str]] = mapped_column(sa.CHAR(36), nullable=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(sa.String(255), nullable=True)
     enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.current_timestamp()
