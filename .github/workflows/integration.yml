@@ -36,9 +36,9 @@ jobs:
           pip install -e ".[test]"
 
       - name: Apply database migration
-        run: |
-          sudo apt-get update && sudo apt-get install -y mariadb-client
-          mysql -h 127.0.0.1 -P 3306 -u root -proot qonosv2_test < db/migrations/0001_init.sql
+        env:
+          QONOS_CONFIG_FILE: config/qonos.integration.conf
+        run: alembic upgrade head
 
       - name: Run integration tests with coverage
         env:

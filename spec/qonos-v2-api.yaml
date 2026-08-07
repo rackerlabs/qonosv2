@@ -762,7 +762,7 @@ components:
       name: action_type
       in: path
       required: true
-      description: Action type identifier (e.g. server_snapshot, volume_backup_full)
+      description: Action type identifier (e.g. server_snapshot, volume_backup_full, volume_backup_incremental)
       schema:
         type: string
         maxLength: 100
@@ -808,6 +808,7 @@ components:
           enum:
             - server_snapshot
             - volume_backup_full
+            - volume_backup_incremental
           description: |
             Must be one of the registered action types from /actions. Validation must check against
             the /actions registry at runtime.
@@ -832,6 +833,11 @@ components:
             volume_backup_full: required volume_id (UUID). Optional backup_name_prefix, description,
             container (strings). Backup name is {prefix}-{volume_name}-{timestamp} (default prefix
             qonos-volume_backup_full). In-use volumes are backed up with force.
+
+            volume_backup_incremental: required volume_id (UUID). Optional backup_name_prefix,
+            description, container (strings). Backup name is {prefix}-{volume_name}-{timestamp}
+            (default prefix qonos-volume_backup_incremental). Requires a successful full backup for
+            the same volume; waits if a full backup is in progress. In-use volumes are backed up with force.
           additionalProperties: true
           examples:
             server_snapshot:
@@ -844,6 +850,11 @@ components:
               value:
                 volume_id: "223e4567-e89b-12d3-a456-426614174001"
                 backup_name_prefix: qonos-backup
+            volume_backup_incremental:
+              summary: volume_backup_incremental parameters
+              value:
+                volume_id: "223e4567-e89b-12d3-a456-426614174001"
+                backup_name_prefix: qonos-inc-backup
         webhook_url:
           type: string
           format: uri
@@ -858,7 +869,8 @@ components:
           format: uuid
           description: |
             Execution profile UUID used for delegated OpenStack trust execution.
-            Required when creating schedules with action_type server_snapshot or volume_backup_full.
+            Required when creating schedules with action_type server_snapshot, volume_backup_full,
+            or volume_backup_incremental.
         enabled:
           type: boolean
         next_run_at:
@@ -896,7 +908,10 @@ components:
         - type age: require max_age_days; value must be omitted. Deletes artifacts older than max_age_days.
 
         - server_snapshot: Glance images
-        - volume_backup_full: full Cinder backups
+        - volume_backup_full: full Cinder backups (deleting a retained full backup may cascade-delete
+          dependent incremental backups for the same volume)
+        - volume_backup_incremental: incremental Cinder backups (requires an existing successful full
+          backup for the same volume)
 
         value or max_age_days of 0 disables that dimension.
       properties:
@@ -951,6 +966,7 @@ components:
           enum:
             - server_snapshot
             - volume_backup_full
+            - volume_backup_incremental
           maxLength: 100
           description: Must be a registered action type from /actions.
         cron_expression:
@@ -969,6 +985,10 @@ components:
 
             volume_backup_full: required volume_id (UUID). Optional backup_name_prefix,
             description, container. Backup name {prefix}-{volume_name}-{timestamp}.
+
+            volume_backup_incremental: required volume_id (UUID). Optional backup_name_prefix,
+            description, container. Backup name {prefix}-{volume_name}-{timestamp}. Requires a
+            successful full backup for the same volume.
           additionalProperties: true
           examples:
             server_snapshot:
@@ -978,6 +998,10 @@ components:
                 image_name_prefix: qonos-snapshot
             volume_backup_full:
               summary: volume_backup_full parameters
+              value:
+                volume_id: "223e4567-e89b-12d3-a456-426614174001"
+            volume_backup_incremental:
+              summary: volume_backup_incremental parameters
               value:
                 volume_id: "223e4567-e89b-12d3-a456-426614174001"
         webhook_url:
@@ -994,7 +1018,7 @@ components:
           format: uuid
           description: |
             Execution profile UUID used for delegated OpenStack trust execution.
-            Required for action_type server_snapshot or volume_backup_full.
+            Required for action_type server_snapshot, volume_backup_full, or volume_backup_incremental.
         enabled:
           type: boolean
           default: true
@@ -1026,6 +1050,10 @@ components:
 
             volume_backup_full: required volume_id (UUID). Optional backup_name_prefix,
             description, container. Backup name {prefix}-{volume_name}-{timestamp}.
+
+            volume_backup_incremental: required volume_id (UUID). Optional backup_name_prefix,
+            description, container. Backup name {prefix}-{volume_name}-{timestamp}. Requires a
+            successful full backup for the same volume.
           additionalProperties: true
           examples:
             server_snapshot:
@@ -1035,6 +1063,10 @@ components:
                 image_name_prefix: qonos-snapshot
             volume_backup_full:
               summary: volume_backup_full parameters
+              value:
+                volume_id: "223e4567-e89b-12d3-a456-426614174001"
+            volume_backup_incremental:
+              summary: volume_backup_incremental parameters
               value:
                 volume_id: "223e4567-e89b-12d3-a456-426614174001"
         webhook_url:
@@ -1250,6 +1282,7 @@ components:
           enum:
             - server_snapshot
             - volume_backup_full
+            - volume_backup_incremental
           maxLength: 100
           description: Inherited from the schedule. Must be a registered action type from /actions.
         action_parameters:
@@ -1261,6 +1294,8 @@ components:
             server_snapshot jobs snapshot server_id to a Glance image named
             {prefix}-{server_name}-{timestamp}.
             volume_backup_full jobs create a full Cinder backup of volume_id.
+            volume_backup_incremental jobs create an incremental Cinder backup of volume_id and
+            require a successful full backup for the same volume.
           additionalProperties: true
         created_at:
           type: string
@@ -1454,7 +1489,7 @@ components:
         action_type:
           type: string
           maxLength: 100
-          description: Identifier used in schedules/jobs (e.g. server_snapshot, volume_backup_full).
+          description: Identifier used in schedules/jobs (e.g. server_snapshot, volume_backup_full, volume_backup_incremental).
         name:
           type: string
           minLength: 1
@@ -1477,6 +1512,12 @@ components:
             volume_backup_full: required volume_id (Cinder volume UUID). Optional
             backup_name_prefix, description, container. Backup naming:
             {prefix}-{volume_name}-{timestamp} (default prefix qonos-volume_backup_full).
+
+            volume_backup_incremental: required volume_id (Cinder volume UUID). Optional
+            backup_name_prefix, description, container. Backup naming:
+            {prefix}-{volume_name}-{timestamp} (default prefix qonos-volume_backup_incremental).
+            Requires a successful full backup for the same volume.
+
             Aligns with the action_types registry seed.
           additionalProperties: true
           examples:
@@ -1493,6 +1534,21 @@ components:
                 additionalProperties: true
             volume_backup_full:
               summary: volume_backup_full JSON Schema
+              value:
+                type: object
+                required: [volume_id]
+                properties:
+                  volume_id:
+                    type: string
+                  backup_name_prefix:
+                    type: string
+                  description:
+                    type: string
+                  container:
+                    type: string
+                additionalProperties: true
+            volume_backup_incremental:
+              summary: volume_backup_incremental JSON Schema
               value:
                 type: object
                 required: [volume_id]

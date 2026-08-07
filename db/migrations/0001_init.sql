@@ -1,11 +1,5 @@
 -- QonoS v2 persistence: initial schema
 
--- Migration bookkeeping
-CREATE TABLE IF NOT EXISTS schema_migrations (
-  version VARCHAR(64) NOT NULL PRIMARY KEY,
-  applied_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 -- Action type registry
 CREATE TABLE IF NOT EXISTS action_types (
   action_type VARCHAR(100) NOT NULL PRIMARY KEY,
@@ -25,7 +19,7 @@ CREATE TABLE IF NOT EXISTS execution_profiles (
   description TEXT NULL,
   auth_type VARCHAR(32) NOT NULL DEFAULT 'trust',
   trust_id CHAR(36) NULL,
-  created_by_user_id CHAR(36) NULL,
+  created_by_user_id VARCHAR(255) NULL,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
