@@ -39,6 +39,9 @@ class ErrorMessages:
     DB_UNAVAILABLE = "Database unavailable"
     DB_READ_ONLY = "Database is read-only"
     SCHEDULE_NAME_CONFLICT = "A schedule with this name already exists in this project"
+    EXECUTION_PROFILE_NAME_CONFLICT = (
+        "An execution profile with this name already exists in this project"
+    )
 
 
 def jsonapi_error_payload(
