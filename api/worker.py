@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
-from fastapi import FastAPI
 from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +23,15 @@ from api.app.notifications import (
 from api.app.config import AppConfig, get_config
 from api.app.db import close_db_engine, get_session_factory
 from api.app.logging import configure_logging
+from api.app.observability.context import log_context
+from api.app.observability.health import mark_process_started
+from api.app.observability.metrics import (
+    observe_job_completed,
+    observe_job_duration,
+    refresh_db_gauges,
+    set_worker_active_jobs,
+)
+from api.app.observability.server import build_observability_app
 from api.app.utils.time import as_utc_naive, utc_now_naive
 from api.app.worker.builtin_handlers import register_builtin_handlers
 from api.app.worker.handlers import ActionHandler, HandlerRegistry
@@ -68,14 +76,6 @@ def _assert_transition(from_status: JobStatusModel, to_status: JobStatusModel) -
 @dataclass
 class WorkerMetrics:
     inflight: int = 0
-    claimed: int = 0
-    completed: int = 0
-    failed: int = 0
-    timed_out: int = 0
-    hard_timed_out: int = 0
-    retried: int = 0
-    stale_requeued: int = 0
-    stale_max_retried: int = 0
 
 
 class WorkerRuntime:
@@ -94,12 +94,13 @@ class WorkerRuntime:
         self.notifier = get_job_event_notifier()
 
     async def run(self) -> None:
-        logger.info(
-            "worker started decision=startup concurrency=%s supported_action_types=%s stale_after_seconds=%s",
-            self.cfg.worker_concurrency,
-            ",".join(self.registry.supported_action_types()),
-            self.cfg.worker_stale_processing_after_seconds,
-        )
+        with log_context(component="qonos.worker"):
+            logger.info(
+                "worker started decision=startup concurrency=%s supported_action_types=%s stale_after_seconds=%s",
+                self.cfg.worker_concurrency,
+                ",".join(self.registry.supported_action_types()),
+                self.cfg.worker_stale_processing_after_seconds,
+            )
         try:
             while not self._stop.is_set():
                 await self._dispatch_once()
@@ -133,7 +134,8 @@ class WorkerRuntime:
             await self._drain_tasks()
             await drain_pending_deliveries()
             await close_notification_publishers()
-            logger.info("worker stopped decision=shutdown")
+            with log_context(component="qonos.worker"):
+                logger.info("worker stopped decision=shutdown")
 
     def stop(self) -> None:
         self._stop.set()
@@ -157,6 +159,8 @@ class WorkerRuntime:
         if slots <= 0:
             return
 
+        set_worker_active_jobs(self.metrics.inflight)
+
         now = utc_now_naive()
         claimed_job_ids = await self._claim_due_jobs_batch(
             supported=supported,
@@ -167,7 +171,6 @@ class WorkerRuntime:
         for job_id in claimed_job_ids:
             if self.metrics.inflight >= self.cfg.worker_concurrency:
                 break
-            self.metrics.claimed += 1
             await self._emit_event_for_job_id(job_id=job_id, event_type="job.started")
             await self._spawn(self._process_claimed_job(job_id))
 
@@ -222,28 +225,20 @@ class WorkerRuntime:
                 return
             claimed = await self._claim_job(job_id=job.id, expected_version=job.version)
             if claimed:
-                self.metrics.claimed += 1
                 await self._emit_event_for_job_id(job_id=job.id, event_type="job.started")
                 await self._spawn(self._process_claimed_job(job.id))
-
-    async def _run_in_slot(self, coro: Any) -> None:
-        await self._sem.acquire()
-        self.metrics.inflight += 1
-        try:
-            await coro
-        finally:
-            self.metrics.inflight = max(0, self.metrics.inflight - 1)
-            self._sem.release()
 
     async def _spawn(self, coro: Any) -> None:
         await self._sem.acquire()
         self.metrics.inflight += 1
+        set_worker_active_jobs(self.metrics.inflight)
         task = asyncio.create_task(coro)
         self._tasks.add(task)
 
         def _done(t: asyncio.Task[Any]) -> None:
             self._tasks.discard(t)
             self.metrics.inflight = max(0, self.metrics.inflight - 1)
+            set_worker_active_jobs(self.metrics.inflight)
             self._sem.release()
 
         task.add_done_callback(_done)
@@ -544,6 +539,19 @@ class WorkerRuntime:
         )
         return len(job_ids)
 
+    def _observe_job_terminal(
+        self,
+        job: JobModel,
+        *,
+        status: str,
+        ended_at: Optional[datetime] = None,
+    ) -> None:
+        observe_job_completed(action_type=job.action_type, status=status)
+        if job.started_at is not None:
+            end = ended_at or utc_now_naive()
+            duration = (end - job.started_at).total_seconds()
+            observe_job_duration(action_type=job.action_type, duration_seconds=duration)
+
     async def _mark_hard_timed_out(
         self, *, job_id: str, expected_version: int, cutoff: datetime
     ) -> None:
@@ -574,15 +582,20 @@ class WorkerRuntime:
                 await session.rollback()
                 return
             await session.commit()
-            self.metrics.hard_timed_out += 1
             logger.warning("job timeout decision=hard_timeout_sweep job_id=%s", job_id)
+            job = await self._load_job(session, job_id)
+            if job is not None:
+                self._observe_job_terminal(
+                    job, status=JobStatusModel.HARD_TIMED_OUT.value, ended_at=now
+                )
             await self._emit_event_for_job_id(
                 job_id=job_id,
                 event_type="job.timed_out",
                 error_message="hard timeout exceeded (sweep)",
                 status=JobStatusModel.HARD_TIMED_OUT.value,
             )
-            job = await self._load_job(session, job_id)
+            if job is None:
+                job = await self._load_job(session, job_id)
             if job is not None:
                 await self._record_fault(
                     job=job,
@@ -633,7 +646,9 @@ class WorkerRuntime:
                     await session.rollback()
                     return
                 await session.commit()
-                self.metrics.stale_max_retried += 1
+                self._observe_job_terminal(
+                    job, status=JobStatusModel.MAX_RETRIED.value, ended_at=now
+                )
                 logger.info(
                     "job reclaim decision=stale_processing_max_retried job_id=%s project_id=%s",
                     job.id,
@@ -677,8 +692,6 @@ class WorkerRuntime:
                 await session.rollback()
                 return
             await session.commit()
-            self.metrics.stale_requeued += 1
-            self.metrics.retried += 1
             logger.info(
                 "job reclaim decision=stale_processing_requeued job_id=%s project_id=%s retry_count=%s",
                 job.id,
@@ -692,103 +705,119 @@ class WorkerRuntime:
             if not job or job.status != JobStatusModel.PROCESSING:
                 return
 
-            handler_cls = self.registry.get(job.action_type)
-            if handler_cls is None:
-                await self._fail_and_retry_or_max(
-                    session=session,
-                    job=job,
-                    failure_status=JobStatusModel.ERROR,
-                    error=RuntimeError(f"No handler registered for action_type={job.action_type}"),
-                    call_hook=False,
-                )
-                return
-
-            handler: ActionHandler = handler_cls()
-            try:
-                handler.validate_parameters(job.action_parameters)
-            except Exception as exc:
-                await self._fail_and_retry_or_max(
-                    session=session,
-                    job=job,
-                    failure_status=JobStatusModel.ERROR,
-                    error=exc,
-                    call_hook=True,
-                    handler=handler,
-                )
-                return
-
-            outcome, err = await self._execute_with_timeouts(handler, job)
-            now = utc_now_naive()
-
-            if outcome == "done":
-                ok = await self._transition(
-                    session=session,
-                    job=job,
-                    from_status=JobStatusModel.PROCESSING,
-                    to_status=JobStatusModel.DONE,
-                    values={"ended_at": now, "completed_at": now, "error_message": None},
-                )
-                if ok:
-                    self.metrics.completed += 1
-                    await self._emit_event_for_job_id(
-                        job_id=job.id,
-                        event_type="job.completed",
-                        status=JobStatusModel.DONE.value,
-                    )
-                    with suppress(Exception):
-                        await handler.on_success(job)
-                    await self._run_retention(job=job, trigger_status=JobStatusModel.DONE)
-                return
-
-            if outcome == "hard_timeout":
-                ok = await self._transition(
-                    session=session,
-                    job=job,
-                    from_status=JobStatusModel.PROCESSING,
-                    to_status=JobStatusModel.HARD_TIMED_OUT,
-                    values={"ended_at": now, "error_message": "hard timeout exceeded"},
-                )
-                if ok:
-                    self.metrics.hard_timed_out += 1
-                    await self._emit_event_for_job_id(
-                        job_id=job.id,
-                        event_type="job.timed_out",
-                        error_message="hard timeout exceeded",
-                        status=JobStatusModel.HARD_TIMED_OUT.value,
-                    )
-                    await self._record_fault(
+            with log_context(
+                correlation_id=job.id,
+                project_id=job.project_id,
+                schedule_id=job.schedule_id,
+                job_id=job.id,
+                action_type=job.action_type,
+                component="qonos.worker",
+            ):
+                handler_cls = self.registry.get(job.action_type)
+                if handler_cls is None:
+                    await self._fail_and_retry_or_max(
+                        session=session,
                         job=job,
-                        code="qonos.job.hard_timeout",
-                        title="Hard timeout exceeded",
-                        detail="hard timeout exceeded",
-                        extra={"action_type": job.action_type, "schedule_id": job.schedule_id},
+                        failure_status=JobStatusModel.ERROR,
+                        error=RuntimeError(
+                            f"No handler registered for action_type={job.action_type}"
+                        ),
+                        call_hook=False,
                     )
-                    with suppress(Exception):
-                        await handler.on_timeout(job)
-                    await self._run_retention(job=job, trigger_status=JobStatusModel.HARD_TIMED_OUT)
-                return
+                    return
 
-            if outcome == "soft_timeout":
-                self.metrics.timed_out += 1
+                handler: ActionHandler = handler_cls()
+                try:
+                    handler.validate_parameters(job.action_parameters)
+                except Exception as exc:
+                    await self._fail_and_retry_or_max(
+                        session=session,
+                        job=job,
+                        failure_status=JobStatusModel.ERROR,
+                        error=exc,
+                        call_hook=True,
+                        handler=handler,
+                    )
+                    return
+
+                outcome, err = await self._execute_with_timeouts(handler, job)
+                now = utc_now_naive()
+
+                if outcome == "done":
+                    ok = await self._transition(
+                        session=session,
+                        job=job,
+                        from_status=JobStatusModel.PROCESSING,
+                        to_status=JobStatusModel.DONE,
+                        values={"ended_at": now, "completed_at": now, "error_message": None},
+                    )
+                    if ok:
+                        self._observe_job_terminal(
+                            job, status=JobStatusModel.DONE.value, ended_at=now
+                        )
+                        await self._emit_event_for_job_id(
+                            job_id=job.id,
+                            event_type="job.completed",
+                            status=JobStatusModel.DONE.value,
+                        )
+                        with suppress(Exception):
+                            await handler.on_success(job)
+                        await self._run_retention(job=job, trigger_status=JobStatusModel.DONE)
+                    return
+
+                if outcome == "hard_timeout":
+                    ok = await self._transition(
+                        session=session,
+                        job=job,
+                        from_status=JobStatusModel.PROCESSING,
+                        to_status=JobStatusModel.HARD_TIMED_OUT,
+                        values={"ended_at": now, "error_message": "hard timeout exceeded"},
+                    )
+                    if ok:
+                        self._observe_job_terminal(
+                            job,
+                            status=JobStatusModel.HARD_TIMED_OUT.value,
+                            ended_at=now,
+                        )
+                        await self._emit_event_for_job_id(
+                            job_id=job.id,
+                            event_type="job.timed_out",
+                            error_message="hard timeout exceeded",
+                            status=JobStatusModel.HARD_TIMED_OUT.value,
+                        )
+                        await self._record_fault(
+                            job=job,
+                            code="qonos.job.hard_timeout",
+                            title="Hard timeout exceeded",
+                            detail="hard timeout exceeded",
+                            extra={"action_type": job.action_type, "schedule_id": job.schedule_id},
+                        )
+                        with suppress(Exception):
+                            await handler.on_timeout(job)
+                        await self._run_retention(
+                            job=job, trigger_status=JobStatusModel.HARD_TIMED_OUT
+                        )
+                    return
+
+                if outcome == "soft_timeout":
+                    await self._fail_and_retry_or_max(
+                        session=session,
+                        job=job,
+                        failure_status=JobStatusModel.TIMED_OUT,
+                        error=err or TimeoutError("soft timeout exceeded"),
+                        call_hook=True,
+                        handler=handler,
+                    )
+                    return
+
                 await self._fail_and_retry_or_max(
                     session=session,
                     job=job,
-                    failure_status=JobStatusModel.TIMED_OUT,
-                    error=err or TimeoutError("soft timeout exceeded"),
+                    failure_status=JobStatusModel.ERROR,
+                    error=err or RuntimeError("unknown handler error"),
                     call_hook=True,
                     handler=handler,
                 )
-                return
-
-            self.metrics.failed += 1
-            await self._fail_and_retry_or_max(
-                session=session,
-                job=job,
-                failure_status=JobStatusModel.ERROR,
-                error=err or RuntimeError("unknown handler error"),
-                call_hook=True,
-                handler=handler,
-            )
 
     async def _execute_with_timeouts(
         self, handler: ActionHandler, job: JobModel
@@ -900,6 +929,9 @@ class WorkerRuntime:
             )
             if not moved:
                 return
+            self._observe_job_terminal(
+                job, status=JobStatusModel.MAX_RETRIED.value, ended_at=utc_now_naive()
+            )
             await self._record_fault(
                 job=job,
                 code="qonos.job.max_retried",
@@ -929,7 +961,6 @@ class WorkerRuntime:
             },
         )
         if ok:
-            self.metrics.retried += 1
             await self._emit_event_for_job_id(
                 job_id=job.id,
                 event_type="job.retrying",
@@ -938,30 +969,23 @@ class WorkerRuntime:
             )
 
 
-def _build_health_app(runtime: WorkerRuntime) -> FastAPI:
-    app = FastAPI(title="QonoS Worker Health")
+def _build_health_app(runtime: WorkerRuntime):
+    async def refresh_metrics() -> None:
+        set_worker_active_jobs(runtime.metrics.inflight)
+        await refresh_db_gauges(runtime.session_factory)
 
-    @app.get("/healthz")
-    async def healthz() -> dict[str, Any]:
+    def health_extra() -> dict[str, Any]:
         return {
-            "status": "ok",
-            "component": "qonos.worker",
             "inflight": runtime.metrics.inflight,
             "concurrency": runtime.cfg.worker_concurrency,
             "supported_action_types": runtime.registry.supported_action_types(),
-            "metrics": {
-                "claimed": runtime.metrics.claimed,
-                "completed": runtime.metrics.completed,
-                "failed": runtime.metrics.failed,
-                "timed_out": runtime.metrics.timed_out,
-                "hard_timed_out": runtime.metrics.hard_timed_out,
-                "retried": runtime.metrics.retried,
-                "stale_requeued": runtime.metrics.stale_requeued,
-                "stale_max_retried": runtime.metrics.stale_max_retried,
-            },
         }
 
-    return app
+    return build_observability_app(
+        component="qonos.worker",
+        health_extra=health_extra,
+        refresh_metrics=refresh_metrics,
+    )
 
 
 async def run_worker() -> None:
@@ -1024,7 +1048,8 @@ async def run_worker() -> None:
 
 
 def main() -> None:
-    configure_logging(log_name="worker")
+    configure_logging(log_name="worker", component="qonos.worker")
+    mark_process_started()
     asyncio.run(run_worker())
 
 

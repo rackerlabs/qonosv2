@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from api.app.openstack_connection import build_openstack_connection
+from api.app.observability.metrics import observe_retention_deleted
 from api.app.utils.time import as_utc_aware, utc_now
 
 logger = logging.getLogger("qonos.worker.retention")
@@ -476,6 +477,7 @@ async def run_retention_for_job(
             stats["deleted"],
             stats["delete_failed"],
         )
+        observe_retention_deleted(action_type=action_type, count=int(stats["deleted"]))
     except Exception as exc:
         logger.warning(
             "retention failed action_type=%s schedule_id=%s trigger_status=%s error=%s",

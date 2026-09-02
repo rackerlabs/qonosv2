@@ -16,6 +16,7 @@ from .db_errors import raise_for_db_error
 from .error_constants import ErrorMessages
 from .schemas import Job, JobCreate, JobDetail, JobFault, JobList, JobStatus, JobUpdate
 from .notifications import get_job_event_notifier
+from .observability.metrics import observe_job_completed, observe_job_created, observe_job_duration
 from .routes_schedules import ensure_schedule_access_allowed, get_schedule_or_404
 from db.src.models import (
     ExecutionProfile as ExecutionProfileModel,
@@ -138,6 +139,7 @@ async def create_job(
         await session.rollback()
         raise_for_db_error(e)
     await session.refresh(job_row)
+    observe_job_created(action_type=job_row.action_type)
     get_job_event_notifier().emit_non_blocking(
         event_type="job.created",
         job=job_row,
@@ -264,6 +266,15 @@ async def _cancel_job(
         await session.rollback()
         raise_for_db_error(e)
     await session.refresh(job)
+    observe_job_completed(action_type=job.action_type, status=JobStatusModel.CANCELLED.value)
+    if job.started_at is not None:
+        started_at = job.started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        observe_job_duration(
+            action_type=job.action_type,
+            duration_seconds=(now - started_at).total_seconds(),
+        )
     return job
 
 
