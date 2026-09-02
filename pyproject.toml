@@ -21,6 +21,7 @@ dependencies = [
     "pydantic>=2.9.0",
     "openstacksdk>=4.0.0",
     "alembic>=1.14.0",
+    "prometheus-client>=0.21.0",
 ]
 
 [project.optional-dependencies]

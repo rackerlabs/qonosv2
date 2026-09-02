@@ -14,6 +14,8 @@ from fastapi import FastAPI
 from .auth.keystone_client import HttpKeystoneClient, KeystoneClient
 from .auth.middleware import KeystoneAuthMiddleware
 from .config import get_config
+from .logging import configure_logging
+from .observability.health import mark_process_started
 from .routes_actions import router as actions_router
 from .routes_execution_profiles import router as execution_profiles_router
 from .routes_health import router as health_router
@@ -25,6 +27,8 @@ from .db import close_db_engine
 
 def create_app(*, keystone_client: KeystoneClient | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
+    configure_logging(log_name="api", component="qonos.api")
+    mark_process_started()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

@@ -83,6 +83,8 @@ webhook_timeout_seconds = 3.0
 poll_interval_seconds = 1
 log_level = INFO
 log_dir = /tmp
+health_host = 0.0.0.0
+health_port = 8082
 
 [worker]
 concurrency = 5
@@ -193,6 +195,14 @@ After a job completes (or fails terminally), retention runs per schedule policy 
 ### Job cleanup
 
 The worker periodically deletes expired terminal jobs (default TTL: 14 days) and their associated `job_faults` rows. Configure via `[worker] job_cleanup_*` settings.
+
+## Observability
+
+| Component | Health | Metrics | Default port |
+|-----------|--------|---------|--------------|
+| API | `/health`, `/health/live`, `/health/ready` | `/metrics` | 8080 |
+| Worker | `/health` | `/metrics` | 8081 (`[worker] health_port`) |
+| Scheduler | `/health` | `/metrics` | 8082 (`[scheduler] health_port`) |
 
 ## CI
 

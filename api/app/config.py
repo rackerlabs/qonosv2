@@ -45,6 +45,9 @@ class AppConfig:
     worker_health_host: str = "0.0.0.0"
     worker_health_port: int = 8081
 
+    scheduler_health_host: str = "0.0.0.0"
+    scheduler_health_port: int = 8082
+
     worker_stale_processing_sweep_interval_seconds: float = 120.0
     worker_stale_processing_after_seconds: Optional[float] = None
     job_cleanup_enabled: bool = True
@@ -133,6 +136,8 @@ def get_config() -> AppConfig:
         worker_backoff_jitter=get_bool("worker", "backoff_jitter", True),
         worker_health_host=get_str("worker", "health_host", "0.0.0.0") or "0.0.0.0",
         worker_health_port=max(1, min(65535, get_int("worker", "health_port", 8081))),
+        scheduler_health_host=get_str("scheduler", "health_host", "0.0.0.0") or "0.0.0.0",
+        scheduler_health_port=max(1, min(65535, get_int("scheduler", "health_port", 8082))),
         worker_id=get_str("worker", "id", "auto") or "auto",
         worker_stale_processing_sweep_interval_seconds=max(
             10.0, get_float("worker", "stale_processing_sweep_interval_seconds", 120.0)
