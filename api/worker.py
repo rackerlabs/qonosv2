@@ -22,6 +22,7 @@ from api.app.notifications import (
 )
 from api.app.config import AppConfig, get_config
 from api.app.db import close_db_engine, get_session_factory
+from api.app.db_retry import with_db_retry
 from api.app.logging import configure_logging
 from api.app.observability.context import log_context
 from api.app.observability.health import mark_process_started
@@ -183,37 +184,41 @@ class WorkerRuntime:
     ) -> list[str]:
         """Claim due QUEUED jobs in one transaction for higher throughput."""
         _assert_transition(JobStatusModel.QUEUED, JobStatusModel.PROCESSING)
-        async with self.session_factory() as session:
-            async with session.begin():
-                result = await session.execute(
-                    select(JobModel.id)
-                    .where(
-                        JobModel.status == JobStatusModel.QUEUED,
-                        JobModel.action_type.in_(supported),
-                        JobModel.run_at <= now,
+
+        async def _claim() -> list[str]:
+            async with self.session_factory() as session:
+                async with session.begin():
+                    result = await session.execute(
+                        select(JobModel.id)
+                        .where(
+                            JobModel.status == JobStatusModel.QUEUED,
+                            JobModel.action_type.in_(supported),
+                            JobModel.run_at <= now,
+                        )
+                        .order_by(JobModel.run_at.asc())
+                        .limit(max(1, slots))
+                        .with_for_update(skip_locked=True)
                     )
-                    .order_by(JobModel.run_at.asc())
-                    .limit(max(1, slots))
-                    .with_for_update(skip_locked=True)
-                )
-                job_ids = [row[0] for row in result.all()]
-                if not job_ids:
-                    return []
-                await session.execute(
-                    update(JobModel)
-                    .where(
-                        JobModel.id.in_(job_ids),
-                        JobModel.status == JobStatusModel.QUEUED,
+                    job_ids = [row[0] for row in result.all()]
+                    if not job_ids:
+                        return []
+                    await session.execute(
+                        update(JobModel)
+                        .where(
+                            JobModel.id.in_(job_ids),
+                            JobModel.status == JobStatusModel.QUEUED,
+                        )
+                        .values(
+                            status=JobStatusModel.PROCESSING,
+                            worker_id=self.worker_id,
+                            started_at=now,
+                            updated_at=now,
+                            version=JobModel.version + 1,
+                        )
                     )
-                    .values(
-                        status=JobStatusModel.PROCESSING,
-                        worker_id=self.worker_id,
-                        started_at=now,
-                        updated_at=now,
-                        version=JobModel.version + 1,
-                    )
-                )
-                return job_ids
+                    return job_ids
+
+        return await with_db_retry(_claim, context="worker.claim")
 
     async def on_job_queued_event(self, job_id: str) -> None:
         self._wake.set()

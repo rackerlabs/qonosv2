@@ -316,6 +316,53 @@ class IntegrationHarness:
             result = await session.execute(select(JobModel).where(JobModel.id == job_id))
             return result.scalar_one()
 
+    async def set_jobs_run_at(self, job_ids: list[str], *, when: Optional[datetime] = None) -> None:
+        run_at = when or utc_now()
+        async with self.session_factory() as session:
+            await session.execute(
+                update(JobModel)
+                .where(JobModel.id.in_(job_ids))
+                .values(run_at=run_at, updated_at=run_at)
+            )
+            await session.commit()
+
+    async def reset_jobs_to_queued(self, job_ids: list[str]) -> None:
+        now = utc_now()
+        async with self.session_factory() as session:
+            await session.execute(
+                update(JobModel)
+                .where(JobModel.id.in_(job_ids))
+                .values(
+                    status=JobStatusModel.QUEUED,
+                    worker_id=None,
+                    started_at=None,
+                    ended_at=None,
+                    completed_at=None,
+                    error_message=None,
+                    retry_count=0,
+                    version=1,
+                    run_at=now,
+                    updated_at=now,
+                )
+            )
+            await session.commit()
+
+    async def pending_job_ids(self, job_ids: list[str]) -> set[str]:
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(JobModel.id).where(
+                    JobModel.id.in_(job_ids),
+                    JobModel.status.notin_(TERMINAL_JOB_STATUSES),
+                )
+            )
+            return {row[0] for row in result.all()}
+
+    def build_ha_worker(self, *, worker_id: str, **cfg_overrides: object) -> WorkerRuntime:
+        db_url = self.worker.cfg.db_url or ""
+        return build_worker_runtime(
+            build_test_config(db_url, worker_id=worker_id, **cfg_overrides)
+        )
+
     def _track_job_status(
         self, statuses_seen: list[JobStatusModel] | None, status: JobStatusModel
     ) -> None:
@@ -372,8 +419,8 @@ class IntegrationHarness:
         return compute_next_run_at(cron_expression, now=now or utc_now())
 
 
-def build_test_config(db_url: str) -> AppConfig:
-    return AppConfig(
+def build_test_config(db_url: str, **overrides: object) -> AppConfig:
+    cfg = AppConfig(
         keystone_url="http://keystone.test:5000/v3",
         keystone_verify_ssl=False,
         keystone_username="qonos-service",
@@ -399,6 +446,9 @@ def build_test_config(db_url: str) -> AppConfig:
         worker_id="integration-test-worker",
         amqp_url=None,
     )
+    for key, value in overrides.items():
+        setattr(cfg, key, value)
+    return cfg
 
 
 def build_worker_runtime(cfg: AppConfig) -> WorkerRuntime:

@@ -54,6 +54,12 @@ Configuration is read from `/etc/qonosv2/qonos.conf` by default. Set `QONOS_CONF
 ```ini
 [database]
 url = mysql+aiomysql://qonos:PASSWORD@mariadb-cluster-primary.openstack.svc.cluster.local:3306/qonos
+pool_size = 5
+max_overflow = 10
+pool_recycle = 3600
+pool_timeout = 30
+retry_attempts = 3
+retry_backoff_seconds = 0.25
 
 [keystone]
 url = http://keystone-api.openstack.svc.cluster.local:5000/v3

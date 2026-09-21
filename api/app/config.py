@@ -23,6 +23,12 @@ class AppConfig:
     endpoint_type: Optional[str] = None
 
     db_url: Optional[str] = None
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_recycle: int = 3600
+    db_pool_timeout: int = 30
+    db_retry_attempts: int = 3
+    db_retry_backoff_seconds: float = 0.25
 
     policy_file: Optional[str] = None
 
@@ -122,6 +128,12 @@ def get_config() -> AppConfig:
         keystone_project_domain_name=get_str("keystone", "project_domain_name", None),
         endpoint_type=get_str("openstack", "endpoint_type", None),
         db_url=get_str("database", "url", None),
+        db_pool_size=max(1, get_int("database", "pool_size", 5)),
+        db_max_overflow=max(0, get_int("database", "max_overflow", 10)),
+        db_pool_recycle=max(0, get_int("database", "pool_recycle", 3600)),
+        db_pool_timeout=max(1, get_int("database", "pool_timeout", 30)),
+        db_retry_attempts=max(1, get_int("database", "retry_attempts", 3)),
+        db_retry_backoff_seconds=max(0.0, get_float("database", "retry_backoff_seconds", 0.25)),
         policy_file=get_str("policy", "file", None),
         poll_interval_seconds=max(0.1, get_float("scheduler", "poll_interval_seconds", 1.0)),
         log_level=(get_str("scheduler", "log_level", "INFO") or "INFO").upper(),

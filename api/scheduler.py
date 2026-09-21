@@ -14,6 +14,7 @@ from uvicorn import Config as UvicornConfig, Server as UvicornServer
 from api.app.messaging.amqp_queue import publish_job_queued
 from api.app.config import get_config
 from api.app.db import get_session_factory
+from api.app.db_retry import with_db_retry
 from api.app.logging import configure_logging
 from api.app.observability.context import log_context
 from api.app.observability.health import mark_process_started
@@ -38,7 +39,8 @@ logger = logging.getLogger("qonos.scheduler")
 async def _process_due_schedules(session_factory: sessionmaker) -> None:
     """Process due schedules using compare-and-swap (CAS) on next_run_at."""
     cycle_started = time.monotonic()
-    try:
+
+    async def _run_cycle() -> None:
         async with session_factory() as session:
             now = utc_now()
             result = await session.execute(
@@ -56,6 +58,9 @@ async def _process_due_schedules(session_factory: sessionmaker) -> None:
 
             for schedule in schedules:
                 await _create_job_for_schedule_cas(session, schedule, now=now)
+
+    try:
+        await with_db_retry(_run_cycle, context="scheduler.tick")
     finally:
         observe_scheduler_cycle(duration_seconds=time.monotonic() - cycle_started)
         try:
