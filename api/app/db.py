@@ -24,6 +24,10 @@ def _init_engine() -> None:
         db_url,
         future=True,
         pool_pre_ping=True,
+        pool_size=cfg.db_pool_size,
+        max_overflow=cfg.db_max_overflow,
+        pool_recycle=cfg.db_pool_recycle,
+        pool_timeout=cfg.db_pool_timeout,
     )
     _session_factory = sessionmaker(
         _engine,
