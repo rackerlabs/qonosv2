@@ -423,6 +423,7 @@ async def update_schedule(
             and schedule.action_type
             in (
                 "server_snapshot",
+                "swift_object_versioning",
                 "volume_backup_full",
                 "volume_backup_incremental",
             )
