@@ -129,6 +129,25 @@ async def _seed_action_types(session: AsyncSession) -> None:
                 enabled=True,
             )
         )
+    if await session.get(ActionTypeModel, "swift_object_versioning") is None:
+        session.add(
+            ActionTypeModel(
+                action_type="swift_object_versioning",
+                name="Swift object versioning",
+                description="Integration test action",
+                action_parameters_schema={
+                    "type": "object",
+                    "properties": {
+                        "container": {"type": "string"},
+                        "target_container": {"type": "string"},
+                        "mode": {"type": "string", "enum": ["snapshot"]},
+                    },
+                    "required": ["container", "target_container"],
+                    "additionalProperties": True,
+                },
+                enabled=True,
+            )
+        )
     await session.commit()
 
 

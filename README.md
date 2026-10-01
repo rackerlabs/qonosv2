@@ -36,6 +36,7 @@ The API manages schedules and jobs. The scheduler creates QUEUED jobs when their
 | Action type | Description |
 |-------------|-------------|
 | `server_snapshot` | Create a Glance image snapshot of a Nova server |
+| `swift_object_versioning` | Swift object versioning (`mode: snapshot` copies a container into an archive) |
 | `volume_backup_full` | Full Cinder backup of a block storage volume |
 | `volume_backup_incremental` | Incremental Cinder backup (requires an existing successful full backup) |
 

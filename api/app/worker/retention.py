@@ -11,6 +11,12 @@ from typing import Any, Callable, Optional
 from api.app.openstack_connection import build_openstack_connection
 from api.app.observability.metrics import observe_retention_deleted
 from api.app.utils.time import as_utc_aware, utc_now
+from api.app.worker.swift_common import (
+    MANIFEST_OBJECT_NAME,
+    extract_object_metadata,
+    list_container_objects,
+    parse_timestamp,
+)
 
 logger = logging.getLogger("qonos.worker.retention")
 
@@ -388,6 +394,86 @@ def _apply_volume_backup_full_retention(
     )
 
 
+def _apply_swift_object_versioning_retention(
+    *,
+    project_id: str,
+    schedule_id: str,
+    action_type: str,
+    policy: RetentionPolicy,
+    now: datetime,
+    target_container: str,
+    trust_id: str | None = None,
+) -> dict[str, int]:
+    conn = _build_connection(project_id=project_id, trust_id=trust_id)
+    object_store = conn.object_store
+
+    listed = list_container_objects(object_store, target_container)
+    scanned = len(listed)
+    object_names = [str(getattr(obj, "name", "") or "") for obj in listed]
+    objects_by_name = dict(zip(object_names, listed, strict=False))
+
+    candidates: list[tuple[str, datetime, str]] = []
+    for name in object_names:
+        if not name.endswith(f"/{MANIFEST_OBJECT_NAME}"):
+            continue
+        obj = objects_by_name.get(name)
+        try:
+            metadata = object_store.get_object_metadata(name, container=target_container)
+        except Exception:
+            continue
+        props = extract_object_metadata(metadata)
+        if str(props.get("qonos_managed", "")).lower() != "true":
+            continue
+        if props.get("qonos_action_type") != action_type:
+            continue
+        if props.get("qonos_schedule_id") != schedule_id:
+            continue
+        created_at = parse_timestamp(props.get("qonos_created_at")) or parse_timestamp(
+            getattr(obj, "last_modified", None) if obj is not None else None
+        )
+        if created_at is None:
+            continue
+        snapshot_root = str(props.get("qonos_snapshot_root") or name.rsplit("/", 1)[0])
+        candidates.append((name, created_at, snapshot_root))
+
+    manifests_to_delete: dict[str, str] = {}
+    if policy.count is not None and policy.count > 0:
+        newest_first = sorted(candidates, key=lambda item: item[1], reverse=True)
+        for manifest_name, _, snapshot_root in newest_first[policy.count :]:
+            manifests_to_delete[manifest_name] = snapshot_root
+
+    if policy.max_age_days is not None and policy.max_age_days > 0:
+        cutoff = now - timedelta(days=policy.max_age_days)
+        for manifest_name, created_at, snapshot_root in candidates:
+            if created_at < cutoff:
+                manifests_to_delete[manifest_name] = snapshot_root
+
+    names_to_delete: set[str] = set()
+    for manifest_name, snapshot_root in manifests_to_delete.items():
+        prefix = f"{snapshot_root}/"
+        names_to_delete.add(manifest_name)
+        for object_name in object_names:
+            if object_name.startswith(prefix):
+                names_to_delete.add(object_name)
+
+    deleted_objects = 0
+    delete_failed = 0
+    for object_name in sorted(names_to_delete):
+        try:
+            object_store.delete_object(object_name, container=target_container)
+            deleted_objects += 1
+        except Exception:
+            delete_failed += 1
+
+    return {
+        "scanned": scanned,
+        "eligible": len(candidates),
+        "delete_candidates": len(manifests_to_delete),
+        "deleted": deleted_objects,
+        "delete_failed": delete_failed,
+    }
+
+
 def _apply_volume_backup_incremental_retention(
     *,
     project_id: str,
@@ -419,6 +505,7 @@ async def run_retention_for_job(
     retention_policy_raw: Any,
     trigger_status: str,
     volume_id: str | None = None,
+    target_container: str | None = None,
     trust_id: str | None = None,
 ) -> None:
     policy = parse_retention_policy(retention_policy_raw)
@@ -457,6 +544,24 @@ async def run_retention_for_job(
                 policy=policy,
                 now=now,
                 volume_id=volume_id,
+                trust_id=trust_id,
+            )
+        elif action_type == "swift_object_versioning":
+            if not target_container:
+                logger.info(
+                    "retention skipped decision=missing_target_container action_type=%s schedule_id=%s",
+                    action_type,
+                    schedule_id,
+                )
+                return
+            stats = await asyncio.to_thread(
+                _apply_swift_object_versioning_retention,
+                project_id=project_id,
+                schedule_id=schedule_id,
+                action_type=action_type,
+                policy=policy,
+                now=now,
+                target_container=target_container,
                 trust_id=trust_id,
             )
         else:

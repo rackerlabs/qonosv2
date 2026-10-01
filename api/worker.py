@@ -338,12 +338,16 @@ class WorkerRuntime:
             if schedule is None:
                 return
             volume_id: str | None = None
+            target_container: str | None = None
+            params = job.action_parameters if isinstance(job.action_parameters, dict) else {}
             if job.action_type in ("volume_backup_full", "volume_backup_incremental"):
-                params = schedule.action_parameters
-                if isinstance(params, dict):
-                    raw_volume_id = params.get("volume_id")
-                    if isinstance(raw_volume_id, str) and raw_volume_id.strip():
-                        volume_id = raw_volume_id.strip()
+                raw_volume_id = params.get("volume_id")
+                if isinstance(raw_volume_id, str) and raw_volume_id.strip():
+                    volume_id = raw_volume_id.strip()
+            if job.action_type == "swift_object_versioning":
+                raw_target_container = params.get("target_container")
+                if isinstance(raw_target_container, str) and raw_target_container.strip():
+                    target_container = raw_target_container.strip()
             await run_retention_for_job(
                 action_type=job.action_type,
                 project_id=job.project_id,
@@ -351,6 +355,7 @@ class WorkerRuntime:
                 retention_policy_raw=schedule.retention_policy,
                 trigger_status=trigger_status.value,
                 volume_id=volume_id,
+                target_container=target_container,
                 trust_id=trust_id,
             )
         except Exception as exc:
