@@ -39,6 +39,7 @@ The API manages schedules and jobs. The scheduler creates QUEUED jobs when their
 | `swift_object_versioning` | Swift object versioning (`mode: snapshot` copies a container into an archive) |
 | `volume_backup_full` | Full Cinder backup of a block storage volume |
 | `volume_backup_incremental` | Incremental Cinder backup (requires an existing successful full backup) |
+| `database_backup` | Backup of an existing database instance |
 
 Each schedule references an execution profile with trust delegation so tenant-scoped jobs run under the correct OpenStack project context.
 

@@ -422,6 +422,7 @@ async def update_schedule(
             and not schedule.execution_profile_id
             and schedule.action_type
             in (
+                "database_backup",
                 "server_snapshot",
                 "swift_object_versioning",
                 "volume_backup_full",

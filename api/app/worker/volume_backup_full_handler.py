@@ -4,6 +4,7 @@ from typing import Any
 
 from db.src.models import Job as JobModel
 
+from . import volume_backup_common as _vbc
 from .volume_backup_common import CinderVolumeBackupHandler
 
 
@@ -24,7 +25,14 @@ class VolumeBackupFullActionHandler(CinderVolumeBackupHandler):
         metadata = self._backup_metadata(job)
 
         def create_backup(pool, conn, volume_id: str) -> tuple[str, str, dict[str, Any] | None]:
-            volume, force = self._validate_volume_for_create(pool, conn, volume_id)
+            cfg = _vbc.get_config()
+            volume, force = self._validate_volume_for_create(
+                pool,
+                conn,
+                volume_id,
+                coordination_wait_seconds=cfg.volume_backup_coordination_wait_timeout_seconds,
+                poll_interval=cfg.volume_backup_poll_interval_seconds,
+            )
             backup_name = self._new_backup_name(prefix=prefix, volume=volume, volume_id=volume_id)
             create_attrs: dict[str, Any] = {
                 "volume_id": volume_id,

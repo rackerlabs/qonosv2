@@ -129,6 +129,21 @@ async def _seed_action_types(session: AsyncSession) -> None:
                 enabled=True,
             )
         )
+    if await session.get(ActionTypeModel, "database_backup") is None:
+        session.add(
+            ActionTypeModel(
+                action_type="database_backup",
+                name="Database backup",
+                description="Integration test action",
+                action_parameters_schema={
+                    "type": "object",
+                    "properties": {"database_instance_id": {"type": "string"}},
+                    "required": ["database_instance_id"],
+                    "additionalProperties": True,
+                },
+                enabled=True,
+            )
+        )
     if await session.get(ActionTypeModel, "swift_object_versioning") is None:
         session.add(
             ActionTypeModel(

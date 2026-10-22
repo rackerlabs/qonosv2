@@ -90,6 +90,7 @@ def _cfg(**kwargs):
     defaults = dict(
         volume_backup_poll_interval_seconds=0.01,
         volume_backup_poll_timeout_seconds=0.2,
+        volume_backup_coordination_wait_timeout_seconds=0.2,
     )
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -271,23 +272,6 @@ async def test_volume_backup_full_reuses_existing_backup_when_volume_is_backing_
     assert result["backup_id"] == "bkp-inflight"
     assert result["status"] == "available"
     assert block.created_attrs is None
-
-
-@pytest.mark.anyio
-async def test_volume_backup_full_rejects_backing_up_volume_without_existing_backup(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    handler = VolumeBackupFullActionHandler()
-    block = _FakeBlockStorage(volume_status="backing-up")
-    conn = _FakeConn(block)
-    monkeypatch.setattr("api.app.worker.volume_backup_common.get_config", lambda: _cfg())
-    monkeypatch.setattr(
-        "api.app.worker.volume_backup_common.build_openstack_connection",
-        lambda project_id, trust_id=None: conn,
-    )
-
-    with pytest.raises(ValueError, match="status=backing-up"):
-        await handler.execute(_job(str(uuid4())))
 
 
 @pytest.mark.anyio

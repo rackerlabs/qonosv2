@@ -11,6 +11,15 @@ from typing import Any, Callable, Optional
 from api.app.openstack_connection import build_openstack_connection
 from api.app.observability.metrics import observe_retention_deleted
 from api.app.utils.time import as_utc_aware, utc_now
+from api.app.worker.database_backup_common import (
+    SKIP_TROVE_BACKUP_STATUSES,
+    TROVE_API_TIMEOUT_SECONDS,
+    backup_status,
+    delete_database_backup,
+    list_instance_backups,
+    parse_backup_created_at,
+    parse_qonos_description,
+)
 from api.app.worker.swift_common import (
     MANIFEST_OBJECT_NAME,
     extract_object_metadata,
@@ -480,6 +489,115 @@ def _apply_swift_object_versioning_retention(
     }
 
 
+def _list_database_backups(
+    pool: ThreadPoolExecutor, conn: Any, database_instance_id: str
+) -> list[Any]:
+    future = pool.submit(
+        lambda: list_instance_backups(conn, instance_id=database_instance_id)
+    )
+    try:
+        return future.result(timeout=TROVE_API_TIMEOUT_SECONDS) or []
+    except FuturesTimeoutError:
+        logger.warning(
+            "database retention backups_list timed out database_instance_id=%s",
+            database_instance_id,
+        )
+        return []
+    except Exception as exc:
+        logger.warning(
+            "database retention backups_list failed database_instance_id=%s error=%s",
+            database_instance_id,
+            exc,
+        )
+        return []
+
+
+def _database_backup_candidates(
+    backups: list[Any],
+    *,
+    project_id: str,
+    schedule_id: str,
+    action_type: str,
+) -> list[tuple[str, datetime]]:
+    candidates: list[tuple[str, datetime]] = []
+    for backup in backups:
+        backup_project = str(getattr(backup, "project_id", "") or "")
+        if backup_project and backup_project != project_id:
+            continue
+        meta = parse_qonos_description(getattr(backup, "description", None))
+        if meta.get("qonos_managed") != "true":
+            continue
+        if meta.get("qonos_action_type") != action_type:
+            continue
+        if meta.get("qonos_schedule_id") != schedule_id:
+            continue
+        if backup_status(backup) in SKIP_TROVE_BACKUP_STATUSES:
+            continue
+        created_at = parse_backup_created_at(backup)
+        if created_at is None:
+            continue
+        candidates.append((str(getattr(backup, "id")), as_utc_aware(created_at)))
+    return candidates
+
+
+def _apply_database_backup_retention(
+    *,
+    project_id: str,
+    schedule_id: str,
+    action_type: str,
+    policy: RetentionPolicy,
+    now: datetime,
+    database_instance_id: str | None = None,
+    trust_id: str | None = None,
+) -> dict[str, int]:
+    if not database_instance_id:
+        logger.warning(
+            "retention skipped decision=missing_database_instance_id schedule_id=%s",
+            schedule_id,
+        )
+        return _empty_volume_retention_stats()
+
+    conn = _build_connection(project_id=project_id, trust_id=trust_id)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="retention-trove") as pool:
+        backups = _list_database_backups(pool, conn, database_instance_id)
+
+    candidates = _database_backup_candidates(
+        backups,
+        project_id=project_id,
+        schedule_id=schedule_id,
+        action_type=action_type,
+    )
+
+    ids_to_delete: set[str] = set()
+    if policy.count is not None and policy.count > 0:
+        newest_first = sorted(candidates, key=lambda x: x[1], reverse=True)
+        for backup_id, _ in newest_first[policy.count :]:
+            ids_to_delete.add(backup_id)
+
+    if policy.max_age_days is not None and policy.max_age_days > 0:
+        cutoff = now - timedelta(days=policy.max_age_days)
+        for backup_id, created_at in candidates:
+            if created_at < cutoff:
+                ids_to_delete.add(backup_id)
+
+    delete_sequence = sorted(ids_to_delete)
+    deleted = 0
+    failed = 0
+    for backup_id in delete_sequence:
+        if delete_database_backup(conn, backup_id):
+            deleted += 1
+        else:
+            failed += 1
+
+    return {
+        "scanned": len(backups),
+        "eligible": len(candidates),
+        "delete_candidates": len(delete_sequence),
+        "deleted": deleted,
+        "delete_failed": failed,
+    }
+
+
 def _apply_volume_backup_incremental_retention(
     *,
     project_id: str,
@@ -511,6 +629,7 @@ async def run_retention_for_job(
     retention_policy_raw: Any,
     trigger_status: str,
     volume_id: str | None = None,
+    database_instance_id: str | None = None,
     target_container: str | None = None,
     trust_id: str | None = None,
 ) -> None:
@@ -568,6 +687,17 @@ async def run_retention_for_job(
                 policy=policy,
                 now=now,
                 target_container=target_container,
+                trust_id=trust_id,
+            )
+        elif action_type == "database_backup":
+            stats = await asyncio.to_thread(
+                _apply_database_backup_retention,
+                project_id=project_id,
+                schedule_id=schedule_id,
+                action_type=action_type,
+                policy=policy,
+                now=now,
+                database_instance_id=database_instance_id,
                 trust_id=trust_id,
             )
         else:

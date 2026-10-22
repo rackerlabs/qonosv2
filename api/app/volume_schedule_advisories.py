@@ -12,6 +12,7 @@ from db.src.models import Schedule as ScheduleModel
 VOLUME_BACKUP_ACTION_TYPES = ("volume_backup_full", "volume_backup_incremental")
 _CRON_ORDER_LOOKAHEAD_DAYS = 14
 _CRON_ORDER_MAX_OCCURRENCES = 64
+_MIN_FULL_TO_INCREMENTAL_GAP_MINUTES = 60
 
 
 def extract_volume_id_from_params(action_type: str, params: dict[str, Any]) -> str | None:
@@ -83,6 +84,68 @@ def _has_incremental_before_full_same_day(
         if min(incremental_times) <= min(full_times):
             return True
     return False
+
+
+def _has_incremental_too_soon_after_full_same_day(
+    *,
+    full_cron_expressions: list[str],
+    incremental_cron_expressions: list[str],
+    min_gap_minutes: int = _MIN_FULL_TO_INCREMENTAL_GAP_MINUTES,
+) -> bool:
+    if not full_cron_expressions or not incremental_cron_expressions:
+        return False
+    if min_gap_minutes <= 0:
+        return False
+
+    now = datetime.now(timezone.utc)
+    full_by_date: dict[date, list[datetime]] = {}
+    incremental_by_date: dict[date, list[datetime]] = {}
+
+    for expr in full_cron_expressions:
+        for run_at in _next_occurrences(expr, now=now):
+            full_by_date.setdefault(run_at.date(), []).append(run_at)
+    for expr in incremental_cron_expressions:
+        for run_at in _next_occurrences(expr, now=now):
+            incremental_by_date.setdefault(run_at.date(), []).append(run_at)
+
+    min_gap_seconds = min_gap_minutes * 60
+    for day, full_times in full_by_date.items():
+        incremental_times = incremental_by_date.get(day)
+        if not incremental_times:
+            continue
+        earliest_full = min(full_times)
+        for inc_at in incremental_times:
+            if inc_at <= earliest_full:
+                continue
+            if (inc_at - earliest_full).total_seconds() < min_gap_seconds:
+                return True
+    return False
+
+
+def _append_volume_cron_advisories(
+    advisories: list[str],
+    *,
+    full_cron_expressions: list[str],
+    incremental_cron_expressions: list[str],
+) -> None:
+    if _has_incremental_before_full_same_day(
+        full_cron_expressions=full_cron_expressions,
+        incremental_cron_expressions=incremental_cron_expressions,
+    ):
+        advisories.append(
+            "Incremental backup schedule runs before full backup on overlapping days; "
+            "adjust cron timing so full runs first."
+        )
+    if _has_incremental_too_soon_after_full_same_day(
+        full_cron_expressions=full_cron_expressions,
+        incremental_cron_expressions=incremental_cron_expressions,
+    ):
+        advisories.append(
+            "Full and incremental run too close together on the same day "
+            f"(under {_MIN_FULL_TO_INCREMENTAL_GAP_MINUTES} minutes apart). "
+            f"Schedule incremental at least {_MIN_FULL_TO_INCREMENTAL_GAP_MINUTES} "
+            "minutes after full."
+        )
 
 
 async def _volume_backup_schedules(
@@ -212,14 +275,11 @@ async def volume_schedule_advisories(
             full_crons.append(candidate_cron)
         elif action_type == "volume_backup_incremental":
             incremental_crons.append(candidate_cron)
-    if _has_incremental_before_full_same_day(
+    _append_volume_cron_advisories(
+        advisories,
         full_cron_expressions=full_crons,
         incremental_cron_expressions=incremental_crons,
-    ):
-        advisories.append(
-            "Incremental backup schedule runs before full backup on overlapping days; "
-            "adjust cron timing so full runs first."
-        )
+    )
     return advisories
 
 
@@ -247,12 +307,9 @@ async def volume_schedule_advisories_for_volume(
         for s in schedules
         if s.action_type == "volume_backup_incremental" and str(s.cron_expression or "").strip()
     ]
-    if _has_incremental_before_full_same_day(
+    _append_volume_cron_advisories(
+        advisories,
         full_cron_expressions=full_crons,
         incremental_cron_expressions=incremental_crons,
-    ):
-        advisories.append(
-            "Incremental backup schedule runs before full backup on overlapping days; "
-            "adjust cron timing so full runs first."
-        )
+    )
     return advisories

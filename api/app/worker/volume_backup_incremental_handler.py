@@ -69,7 +69,13 @@ class VolumeBackupIncrementalActionHandler(CinderVolumeBackupHandler):
                     "running volume_backup_incremental"
                 )
 
-            volume, force = self._validate_volume_for_create(pool, conn, volume_id)
+            volume, force = self._validate_volume_for_create(
+                pool,
+                conn,
+                volume_id,
+                coordination_wait_seconds=cfg.volume_backup_coordination_wait_timeout_seconds,
+                poll_interval=cfg.volume_backup_poll_interval_seconds,
+            )
             backup_name = self._new_backup_name(prefix=prefix, volume=volume, volume_id=volume_id)
             metadata = self._backup_metadata(job, qonos_parent_full_backup_id=parent_full_backup_id)
             create_attrs: dict[str, Any] = {

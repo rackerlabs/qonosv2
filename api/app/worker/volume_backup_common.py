@@ -235,21 +235,42 @@ class CinderVolumeBackupHandler(ActionHandler):
         pool: ThreadPoolExecutor,
         conn: Any,
         volume_id: str,
+        *,
+        coordination_wait_seconds: float = 0.0,
+        poll_interval: float = 5.0,
     ) -> tuple[Any, bool]:
-        volume = self._call_with_timeout(
-            pool,
-            lambda: conn.block_storage.get_volume(volume_id),
-            timeout=CINDER_API_TIMEOUT_SECONDS,
-            operation="get_volume",
-            subject_id=volume_id,
+        deadline = (
+            time.monotonic() + coordination_wait_seconds if coordination_wait_seconds > 0 else 0.0
         )
-        if volume is None:
-            raise ValueError(f"Volume not found: {volume_id}")
+        while True:
+            volume = self._call_with_timeout(
+                pool,
+                lambda: conn.block_storage.get_volume(volume_id),
+                timeout=CINDER_API_TIMEOUT_SECONDS,
+                operation="get_volume",
+                subject_id=volume_id,
+            )
+            if volume is None:
+                raise ValueError(f"Volume not found: {volume_id}")
 
-        volume_status = str(getattr(volume, "status", "") or "").lower()
-        if volume_status not in ALLOWED_VOLUME_STATUSES:
-            raise ValueError(f"Volume not available for backup: {volume_id} status={volume_status}")
-        return volume, volume_status == "in-use"
+            volume_status = str(getattr(volume, "status", "") or "").lower()
+            if volume_status in ALLOWED_VOLUME_STATUSES:
+                return volume, volume_status == "in-use"
+            if (
+                volume_status == "backing-up"
+                and coordination_wait_seconds > 0
+                and time.monotonic() < deadline
+            ):
+                logger.info(
+                    "volume backup coordination decision=wait_for_volume volume_id=%s status=%s",
+                    volume_id,
+                    volume_status,
+                )
+                time.sleep(poll_interval)
+                continue
+            raise ValueError(
+                f"Volume not available for backup: {volume_id} status={volume_status}"
+            )
 
     def _new_backup_name(self, *, prefix: str, volume: Any, volume_id: str) -> str:
         volume_name = getattr(volume, "name", None) or volume_id

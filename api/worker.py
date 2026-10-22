@@ -49,6 +49,13 @@ from db.src.models import (
 logger = logging.getLogger("qonos.worker")
 
 
+def _stripped_action_param(params: dict[str, Any], key: str) -> str | None:
+    raw = params.get(key)
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
+
+
 ALLOWED_TRANSITIONS: dict[JobStatusModel, set[JobStatusModel]] = {
     JobStatusModel.QUEUED: {JobStatusModel.PROCESSING, JobStatusModel.CANCELLED},
     JobStatusModel.PROCESSING: {
@@ -337,17 +344,22 @@ class WorkerRuntime:
                     )
             if schedule is None:
                 return
-            volume_id: str | None = None
-            target_container: str | None = None
             params = job.action_parameters if isinstance(job.action_parameters, dict) else {}
-            if job.action_type in ("volume_backup_full", "volume_backup_incremental"):
-                raw_volume_id = params.get("volume_id")
-                if isinstance(raw_volume_id, str) and raw_volume_id.strip():
-                    volume_id = raw_volume_id.strip()
-            if job.action_type == "swift_object_versioning":
-                raw_target_container = params.get("target_container")
-                if isinstance(raw_target_container, str) and raw_target_container.strip():
-                    target_container = raw_target_container.strip()
+            volume_id = (
+                _stripped_action_param(params, "volume_id")
+                if job.action_type in ("volume_backup_full", "volume_backup_incremental")
+                else None
+            )
+            target_container = (
+                _stripped_action_param(params, "target_container")
+                if job.action_type == "swift_object_versioning"
+                else None
+            )
+            database_instance_id = (
+                _stripped_action_param(params, "database_instance_id")
+                if job.action_type == "database_backup"
+                else None
+            )
             await run_retention_for_job(
                 action_type=job.action_type,
                 project_id=job.project_id,
@@ -355,6 +367,7 @@ class WorkerRuntime:
                 retention_policy_raw=schedule.retention_policy,
                 trigger_status=trigger_status.value,
                 volume_id=volume_id,
+                database_instance_id=database_instance_id,
                 target_container=target_container,
                 trust_id=trust_id,
             )
