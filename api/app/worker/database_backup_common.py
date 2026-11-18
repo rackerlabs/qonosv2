@@ -15,6 +15,7 @@ SUCCESSFUL_BACKUP_STATUSES = frozenset({"completed"})
 FAILED_BACKUP_STATUSES = frozenset({"failed", "delete_failed"})
 SKIP_TROVE_BACKUP_STATUSES = frozenset({"building", "deleting", "deleted"})
 TROVE_BACKUP_DESCRIPTION_MAX_LENGTH = 255
+_QONOS_DESC_PREFIX = "Qonos schedule="
 
 
 def backup_status(backup: Any) -> str:
@@ -57,45 +58,45 @@ def qonos_description_metadata(
     user_description: str | None = None,
 ) -> str:
     _ = project_id  # retained for call-site compatibility; not stored in description
-    payload: dict[str, str] = {
-        "m": "1",
-        "a": action_type,
-        "j": job_id,
-        "s": schedule_id,
-    }
-    encoded = json.dumps(payload, separators=(",", ":"))
-    if user_description:
-        note = user_description.strip()
-        if note:
-            room = TROVE_BACKUP_DESCRIPTION_MAX_LENGTH - len(encoded) - len(',"u":""') - 1
-            if room > 0:
-                payload["u"] = note[:room]
-                encoded = json.dumps(payload, separators=(",", ":"))
-    if len(encoded) > TROVE_BACKUP_DESCRIPTION_MAX_LENGTH:
+    text = (
+        f"{_QONOS_DESC_PREFIX}{schedule_id.strip()} "
+        f"job={job_id.strip()} "
+        f"action={action_type.strip()}"
+    )
+    note = (user_description or "").strip()
+    if note:
+        sep = " | "
+        room = TROVE_BACKUP_DESCRIPTION_MAX_LENGTH - len(text) - len(sep)
+        if room > 0:
+            text = f"{text}{sep}{note[:room]}"
+    if len(text) > TROVE_BACKUP_DESCRIPTION_MAX_LENGTH:
         raise ValueError(
             f"Trove backup description exceeds {TROVE_BACKUP_DESCRIPTION_MAX_LENGTH} characters"
         )
-    return encoded
+    return text
 
 
 def parse_qonos_description(description: Any) -> dict[str, str]:
-    if not isinstance(description, str) or not description.strip():
+    if not isinstance(description, str) or not (text := description.strip()).startswith(
+        _QONOS_DESC_PREFIX
+    ):
         return {}
     try:
-        data = json.loads(description)
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    raw = {str(k): str(v) for k, v in data.items()}
-    if raw.get("m") != "1":
+        rest = text[len(_QONOS_DESC_PREFIX) :]
+        schedule_id, rest = rest.split(" job=", 1)
+        job_id, rest = rest.split(" action=", 1)
+        if " | " in rest:
+            action_type, user_note = rest.split(" | ", 1)
+        else:
+            action_type, user_note = rest, ""
+    except ValueError:
         return {}
     return {
         "qonos_managed": "true",
-        "qonos_action_type": raw.get("a") or "",
-        "qonos_job_id": raw.get("j") or "",
-        "qonos_schedule_id": raw.get("s") or "",
-        "qonos_user_description": raw.get("u") or "",
+        "qonos_action_type": action_type.strip(),
+        "qonos_job_id": job_id.strip().lower(),
+        "qonos_schedule_id": schedule_id.strip().lower(),
+        "qonos_user_description": user_note.strip(),
     }
 
 

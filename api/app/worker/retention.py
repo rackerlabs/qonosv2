@@ -225,9 +225,19 @@ def _delete_backup(conn: Any, backup_id: str) -> bool:
         try:
             conn.block_storage.delete_backup(backup_id)
             return True
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "retention decision=delete_backup_failed backup_id=%s error=%s",
+                backup_id,
+                exc,
+            )
             return False
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "retention decision=delete_backup_failed backup_id=%s error=%s",
+            backup_id,
+            exc,
+        )
         return False
 
 
@@ -276,6 +286,36 @@ def _cascade_delete_order(
             order.append(root_id)
             seen.add(root_id)
     return order
+
+
+def _parent_ids_of_kept_backups(backups: list[Any], kept_backup_ids: set[str]) -> set[str]:
+    """Cinder cannot delete a backup that is still parent of a retained incremental."""
+    protected: set[str] = set()
+    for backup in backups:
+        backup_id = str(getattr(backup, "id", "") or "")
+        if backup_id not in kept_backup_ids:
+            continue
+        parent_id = _backup_parent_id(backup)
+        if parent_id:
+            protected.add(parent_id)
+    return protected
+
+
+def _incremental_retention_delete_sequence(
+    ids_to_delete: set[str],
+    candidates: list[tuple[str, datetime]],
+) -> list[str]:
+    """Delete newer surplus incrementals before older ones (Cinder chain dependency)."""
+    created_by_id = {backup_id: created_at for backup_id, created_at in candidates}
+    min_ts = datetime.min.replace(tzinfo=timezone.utc)
+
+    def sort_key(backup_id: str) -> datetime:
+        ts = created_by_id.get(backup_id)
+        if ts is None:
+            return min_ts
+        return as_utc_aware(ts)
+
+    return sorted(ids_to_delete, key=sort_key, reverse=True)
 
 
 def _volume_backup_candidates(
@@ -345,9 +385,11 @@ def _apply_volume_backup_retention(
         incremental_only=incremental_only,
     )
 
+    newest_first = sorted(candidates, key=lambda x: x[1], reverse=True)
+    kept_ids: set[str] = set()
     ids_to_delete: set[str] = set()
     if policy.count is not None and policy.count > 0:
-        newest_first = sorted(candidates, key=lambda x: x[1], reverse=True)
+        kept_ids = {backup_id for backup_id, _ in newest_first[: policy.count]}
         for backup_id, _ in newest_first[policy.count :]:
             ids_to_delete.add(backup_id)
 
@@ -357,9 +399,23 @@ def _apply_volume_backup_retention(
             if created_at < cutoff:
                 ids_to_delete.add(backup_id)
 
+    if incremental_only and kept_ids:
+        protected_parents = _parent_ids_of_kept_backups(backups, kept_ids)
+        skipped = ids_to_delete & protected_parents
+        if skipped:
+            logger.info(
+                "retention decision=skip_incremental_parent_of_kept schedule_id=%s "
+                "backup_ids=%s",
+                schedule_id,
+                ",".join(sorted(skipped)),
+            )
+            ids_to_delete -= protected_parents
+
     if cascade_on_full_delete and ids_to_delete:
         children_by_parent = _build_children_by_parent(backups)
         delete_sequence = _cascade_delete_order(ids_to_delete, children_by_parent)
+    elif incremental_only and ids_to_delete:
+        delete_sequence = _incremental_retention_delete_sequence(ids_to_delete, candidates)
     else:
         delete_sequence = sorted(ids_to_delete)
 

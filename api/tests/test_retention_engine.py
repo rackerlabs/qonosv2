@@ -263,6 +263,55 @@ async def test_volume_backup_incremental_retention_count_based(
 
 
 @pytest.mark.anyio
+async def test_volume_backup_incremental_retention_deletes_surplus_newest_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Surplus incrementals must be removed newest-first (day 2 before day 1)."""
+    now = utc_now()
+    backups = [
+        _bkp(backup_id="full1", created_at=now - timedelta(days=11)),
+        _bkp(
+            backup_id="inc1",
+            created_at=now - timedelta(days=10),
+            action_type="volume_backup_incremental",
+            incremental=True,
+            parent_id="full1",
+        ),
+        _bkp(
+            backup_id="inc2",
+            created_at=now - timedelta(days=9),
+            action_type="volume_backup_incremental",
+            incremental=True,
+            parent_id="full1",
+        ),
+        _bkp(
+            backup_id="inc3",
+            created_at=now - timedelta(days=8),
+            action_type="volume_backup_incremental",
+            incremental=True,
+            parent_id="full1",
+        ),
+    ]
+    backup_api = _FakeBackupAPI(backups)
+    monkeypatch.setattr(
+        retention,
+        "_build_connection",
+        lambda project_id, trust_id=None: _FakeConn(backup_api=backup_api),
+    )
+
+    await retention.run_retention_for_job(
+        action_type="volume_backup_incremental",
+        project_id="proj-1",
+        schedule_id="sched-1",
+        retention_policy_raw={"type": "count", "value": 1},
+        trigger_status="DONE",
+        volume_id="vol-1",
+    )
+
+    assert backup_api.deleted == ["inc2", "inc1"]
+
+
+@pytest.mark.anyio
 async def test_volume_backup_full_retention_cascade_deletes_dependent_incrementals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
